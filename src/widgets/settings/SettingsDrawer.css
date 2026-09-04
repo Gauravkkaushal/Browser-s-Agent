@@ -1,0 +1,172 @@
+.settings-drawer .ant-drawer-content {
+  background: #0f172a !important;
+  color: #f1f5f9;
+}
+
+.settings-drawer .ant-drawer-header {
+  background: #1e293b !important;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.15) !important;
+  padding: 14px 18px;
+}
+
+.settings-drawer-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-drawer-header .header-icon {
+  font-size: 20px;
+  color: #38bdf8;
+}
+
+.settings-drawer-header .title-text {
+  font-size: 15px;
+  font-weight: 600;
+  color: #f8fafc;
+  line-height: 1.2;
+}
+
+.settings-drawer-header .subtitle-text {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.settings-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-bottom: 20px;
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.section-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e2e8f0;
+  letter-spacing: 0.2px;
+}
+
+.section-hint {
+  font-size: 11px;
+  color: #94a3b8;
+  margin: 0 !important;
+  line-height: 1.4;
+}
+
+.engine-radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.engine-radio-group .ant-radio-button-wrapper {
+  height: auto !important;
+  line-height: normal !important;
+  padding: 10px 12px !important;
+  background: #1e293b !important;
+  border: 1px solid rgba(148, 163, 184, 0.2) !important;
+  border-radius: 8px !important;
+  color: #cbd5e1 !important;
+  transition: all 0.2s ease;
+}
+
+.engine-radio-group .ant-radio-button-wrapper:hover {
+  border-color: #38bdf8 !important;
+  background: #1e293b !important;
+}
+
+.engine-radio-group .ant-radio-button-wrapper-checked {
+  background: rgba(56, 189, 248, 0.08) !important;
+  border-color: #38bdf8 !important;
+  color: #f8fafc !important;
+}
+
+.engine-card .card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.engine-card .card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f8fafc;
+}
+
+.engine-card .card-icon {
+  font-size: 14px;
+  color: #38bdf8;
+}
+
+.engine-card .card-icon.onnx-icon {
+  color: #4ade80;
+}
+
+.engine-card .card-icon.server-icon {
+  color: #c084fc;
+}
+
+.engine-card .card-desc {
+  font-size: 11px;
+  color: #94a3b8;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.settings-divider {
+  margin: 8px 0 !important;
+  border-color: rgba(148, 163, 184, 0.12) !important;
+}
+
+.server-input-group {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.server-alert {
+  margin-top: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.specs-card {
+  background: #1e293b;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.spec-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+}
+
+.spec-key {
+  color: #94a3b8;
+}
+
+.spec-val {
+  color: #f1f5f9;
+  font-weight: 500;
+  text-align: right;
+  max-width: 60%;
+}
+
+.settings-actions {
+  margin-top: 10px;
+}

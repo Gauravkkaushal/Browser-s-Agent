@@ -1,22 +1,50 @@
 {
   "manifest_version": 3,
-  "name": "NetraShield",
-  "description": "Privacy-preserving browser vision agent that redacts sensitive page context before server reasoning.",
-  "version": "0.1.0",
-  "action": {
-    "default_popup": "index.html",
-    "default_title": "NetraShield"
+  "name": "NetraShield - Privacy-Preserving Autonomous Browser Agent",
+  "description": "On-device privacy scanner and local ONNX ML intent reasoning agent for safe web interactions (ISRO SIH 26171).",
+  "version": "1.0.0",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
   },
-  "permissions": ["activeTab", "tabs", "storage"],
-  "host_permissions": ["http://localhost:8787/*"],
+  "action": {
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    },
+    "default_popup": "index.html",
+    "default_title": "NetraShield Agent"
+  },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content-script.js"],
+      "js": ["content.js"],
       "run_at": "document_idle"
+    }
+  ],
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "models/*",
+        "onnx/*"
+      ],
+      "matches": ["<all_urls>"]
     }
   ]
 }

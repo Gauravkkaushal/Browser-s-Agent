@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Express Checkout & Payment | NetraShield Demo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: #131b2e;
+      --border: #1e293b;
+      --primary: #38bdf8;
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+      --danger: #ef4444;
+      --success: #10b981;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
+    body { background: var(--bg); color: var(--text); padding: 40px 20px; display: flex; justify-content: center; }
+    .container { max-width: 820px; width: 100%; }
+    .header { text-align: center; margin-bottom: 28px; }
+    .badge { display: inline-block; padding: 4px 12px; background: rgba(16, 185, 129, 0.12); color: var(--success); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 999px; font-size: 12px; font-weight: 600; margin-bottom: 12px; }
+    h1 { font-size: 26px; font-weight: 700; margin-bottom: 8px; }
+    p.subtitle { color: var(--text-muted); font-size: 14px; }
+    .notice-card { background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 10px; padding: 14px 18px; margin-bottom: 24px; font-size: 13px; color: #bae6fd; line-height: 1.5; }
+    .checkout-layout { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 24px; }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 14px; padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); }
+    h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #e2e8f0; border-bottom: 1px solid #1e293b; padding-bottom: 10px; }
+    .form-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    label { font-size: 12px; font-weight: 500; color: #94a3b8; }
+    input { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 10px 12px; color: #fff; font-size: 14px; }
+    input:focus { outline: none; border-color: var(--primary); }
+    .bill-item { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 10px; color: #cbd5e1; }
+    .bill-total { display: flex; justify-content: space-between; font-size: 16px; font-weight: 700; margin-top: 14px; padding-top: 14px; border-top: 1px dashed #334155; color: #fff; }
+    .btn { width: 100%; padding: 12px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; border: none; transition: all 0.2s; margin-top: 10px; }
+    .btn-primary { background: #10b981; color: #0b0f19; }
+    .btn-primary:hover { background: #34d399; }
+    .btn-secondary { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; }
+    .btn-secondary:hover { background: #334155; }
+    .btn-danger { background: rgba(239, 68, 68, 0.12); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.2); }
+    .demo-nav { margin-top: 30px; text-align: center; font-size: 13px; color: var(--text-muted); }
+    .demo-nav a { color: var(--primary); text-decoration: none; margin: 0 8px; }
+    .demo-nav a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="badge">Payment Gateway Mock</div>
+      <h1>Secure Checkout & Settlement</h1>
+      <p class="subtitle">E-Commerce transaction with sensitive financial cards, CVV, and UPI endpoints.</p>
+    </div>
+
+    <div class="notice-card">
+      💳 <strong>Test Instructions:</strong> Ask NetraShield <em>"Pay for my order"</em> or <em>"Proceed to checkout"</em>. Notice that your 16-digit card number, CVV, and financial currency totals are strictly redacted locally, and the agent targets the Payment button without seeing financial secrets.
+    </div>
+
+    <div class="checkout-layout">
+      <div class="card">
+        <h2>Payment Details</h2>
+        <form id="payment-form" onsubmit="event.preventDefault(); alert('Payment of ₹5,798.00 Authorized!');">
+          <div class="form-group">
+            <label for="cardholder">Cardholder Name</label>
+            <input type="text" id="cardholder" name="cardholder" value="Gaurav Kaushal">
+          </div>
+
+          <div class="form-group">
+            <label for="cardNumber">Card Number</label>
+            <input type="text" id="cardNumber" name="cardNumber" value="4532 1122 3344 5566">
+          </div>
+
+          <div class="row">
+            <div class="form-group">
+              <label for="expiry">Expiry Date</label>
+              <input type="text" id="expiry" name="expiry" value="09/28" placeholder="MM/YY">
+            </div>
+            <div class="form-group">
+              <label for="cvv">CVV / Security Code</label>
+              <input type="password" id="cvv" name="cvv" value="883" placeholder="3 digits">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="upi">UPI ID (Alternative)</label>
+            <input type="text" id="upi" name="upi" value="gaurav@okhdfcbank">
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Order Summary</h2>
+        <div class="bill-item">
+          <span>NetraShield Autonomous Agent</span>
+          <span>₹4,999.00</span>
+        </div>
+        <div class="bill-item">
+          <span>Local ONNX Model Engine</span>
+          <span>₹799.00</span>
+        </div>
+        <div class="bill-item">
+          <span>GST (18% Included)</span>
+          <span>₹884.00</span>
+        </div>
+        <div class="bill-total">
+          <span>Grand Total</span>
+          <span style="color: #38bdf8;">₹5,798.00</span>
+        </div>
+
+        <button type="submit" form="payment-form" id="btn-pay-now" class="btn btn-primary">Proceed to Pay ₹5,798.00</button>
+        <button type="button" id="btn-apply-coupon" class="btn btn-secondary" onclick="alert('Coupon APPLIED!')">Apply Promo Code</button>
+        <button type="button" id="btn-cancel-order" class="btn btn-danger" onclick="alert('Order Cancelled!')">Cancel Order</button>
+      </div>
+    </div>
+
+    <div class="demo-nav">
+      Switch Demos:
+      <a href="/demo/kyc">KYC Portal</a> •
+      <a href="/demo/checkout">E-Commerce Checkout</a> •
+      <a href="/demo/admin">Admin Console</a> •
+      <a href="/metrics/dashboard">Live Privacy Dashboard</a>
+    </div>
+  </div>
+</body>
+</html>

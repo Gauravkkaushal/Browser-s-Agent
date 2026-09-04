@@ -27,6 +27,9 @@ const patterns = [
   { type: 'UPI ID', regex: /\b[\w.-]+@(?:upi|oksbi|okhdfcbank|okaxis|paytm|ibl|ybl)\b/i },
   { type: 'PAN', regex: /\b[A-Z]{5}\d{4}[A-Z]\b/ },
   { type: 'Aadhaar-like ID', regex: /\b\d{4}\s?\d{4}\s?\d{4}\b/ },
+  { type: 'Voter ID', regex: /\b[A-Z]{3}[0-9]{7}\b/ },
+  { type: 'Driving License', regex: /\b[A-Z]{2}[0-9]{2}[ -]?(?:19|20)[0-9]{2}[0-9]{7}\b|\b[A-Z]{2}[ -]?[0-9]{13,15}\b/ },
+  { type: 'GSTIN', regex: /\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}\b/ },
   { type: 'Date of birth', regex: /\b(?:dob|birth|date of birth)[:\s-]*\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b/i },
 ]
 
