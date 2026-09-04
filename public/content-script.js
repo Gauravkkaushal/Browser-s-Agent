@@ -1,5 +1,6 @@
 const NETRASHIELD_MASK_LAYER = 'netrashield-mask-layer'
 const NETRASHIELD_HIGHLIGHT = 'netrashield-action-highlight'
+const NETRASHIELD_DOM_ID = 'netrashieldDomId'
 
 const sensitiveKeywords = [
   'aadhaar',
@@ -36,6 +37,18 @@ const patterns = [
 let lastScan = null
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === 'NETRASHIELD_DOM_ENQUIRY') {
+    const enquiry = collectDomEnquiry()
+    logDomEnquiry(enquiry)
+    sendResponse({
+      ok: true,
+      count: enquiry.elements.length,
+      url: enquiry.page.url,
+      title: enquiry.page.title,
+    })
+    return true
+  }
+
   if (message.type === 'NETRASHIELD_SCAN') {
     lastScan = scanPage(message.mode)
     sendResponse(lastScan)
@@ -70,6 +83,210 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   return false
 })
+
+function collectDomEnquiry() {
+  const started = performance.now()
+  const elements = Array.from(document.querySelectorAll('*')).map((element, index) => {
+    element.dataset[NETRASHIELD_DOM_ID] = element.dataset[NETRASHIELD_DOM_ID] || `ns_dom_${Date.now()}_${index}`
+
+    const rect = element.getBoundingClientRect()
+    const styles = window.getComputedStyle(element)
+    const tag = element.tagName.toLowerCase()
+
+    return {
+      index,
+      domId: element.dataset[NETRASHIELD_DOM_ID],
+      tag,
+      selector: buildElementSelector(element),
+      dataSelector: `[data-netrashield-dom-id="${element.dataset[NETRASHIELD_DOM_ID]}"]`,
+      nearestNamedParent: getNearestNamedParent(element),
+      id: element.id || '',
+      classes: Array.from(element.classList),
+      role: element.getAttribute('role') || getRole(element),
+      name: element.getAttribute('name') || '',
+      type: element.getAttribute('type') || '',
+      ariaLabel: element.getAttribute('aria-label') || '',
+      title: element.getAttribute('title') || '',
+      text: getDomEnquiryText(element),
+      childElementCount: element.childElementCount,
+      parent: element.parentElement ? buildElementSelector(element.parentElement) : '',
+      viewportBox: {
+        x: roundMetric(rect.x),
+        y: roundMetric(rect.y),
+        top: roundMetric(rect.top),
+        right: roundMetric(rect.right),
+        bottom: roundMetric(rect.bottom),
+        left: roundMetric(rect.left),
+        width: roundMetric(rect.width),
+        height: roundMetric(rect.height),
+      },
+      pageBox: {
+        x: roundMetric(rect.left + window.scrollX),
+        y: roundMetric(rect.top + window.scrollY),
+        width: roundMetric(rect.width),
+        height: roundMetric(rect.height),
+      },
+      visibility: {
+        visible: isElementRendered(rect, styles),
+        display: styles.display,
+        visibility: styles.visibility,
+        opacity: styles.opacity,
+        overflow: styles.overflow,
+      },
+      layout: {
+        position: styles.position,
+        zIndex: styles.zIndex,
+        boxSizing: styles.boxSizing,
+        margin: styles.margin,
+        padding: styles.padding,
+        border: styles.border,
+      },
+      typography: {
+        fontFamily: styles.fontFamily,
+        fontSize: styles.fontSize,
+        fontWeight: styles.fontWeight,
+        lineHeight: styles.lineHeight,
+        color: styles.color,
+        textAlign: styles.textAlign,
+      },
+      appearance: {
+        backgroundColor: styles.backgroundColor,
+        borderRadius: styles.borderRadius,
+        boxShadow: styles.boxShadow,
+        cursor: styles.cursor,
+      },
+    }
+  })
+
+  return {
+    capturedAt: new Date().toISOString(),
+    page: {
+      url: location.href,
+      title: document.title || location.hostname,
+      origin: location.origin,
+    },
+    viewport: {
+      width: window.innerWidth,
+      height: window.innerHeight,
+      scrollX: roundMetric(window.scrollX),
+      scrollY: roundMetric(window.scrollY),
+      devicePixelRatio: window.devicePixelRatio,
+    },
+    document: {
+      width: Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth || 0),
+      height: Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0),
+      compatMode: document.compatMode,
+      elementCount: elements.length,
+    },
+    timings: {
+      collectMs: roundMetric(performance.now() - started),
+    },
+    elements,
+  }
+}
+
+function logDomEnquiry(enquiry) {
+  const visibleElements = enquiry.elements.filter((element) => element.visibility.visible && element.text)
+  const printableEnquiry = {
+    ...enquiry,
+    document: {
+      ...enquiry.document,
+      printedElementCount: visibleElements.length,
+    },
+    elements: visibleElements,
+  }
+  const tableRows = visibleElements.map((element) => ({
+    index: element.index,
+    domId: element.domId,
+    tag: element.tag,
+    selector: element.selector,
+    dataSelector: element.dataSelector,
+    nearestNamedParent: element.nearestNamedParent,
+    x: element.pageBox.x,
+    y: element.pageBox.y,
+    width: element.pageBox.width,
+    height: element.pageBox.height,
+    position: element.layout.position,
+    display: element.visibility.display,
+    text: element.text,
+  }))
+
+  console.groupCollapsed(
+    `[NetraShield DOM enquiry] ${visibleElements.length} visible elements - ${enquiry.page.url}`,
+  )
+  console.log('Visible DOM enquiry object:', printableEnquiry)
+  console.table(tableRows)
+  console.groupEnd()
+}
+
+function buildElementSelector(element) {
+  const tag = element.tagName.toLowerCase()
+
+  if (element.id) {
+    return `${tag}#${CSS.escape(element.id)}`
+  }
+
+  const classes = Array.from(element.classList)
+    .slice(0, 3)
+    .map((className) => `.${CSS.escape(className)}`)
+    .join('')
+
+  const parent = element.parentElement
+
+  if (!parent) {
+    return tag + classes
+  }
+
+  const siblings = Array.from(parent.children).filter((sibling) => sibling.tagName === element.tagName)
+  const suffix = siblings.length > 1 ? `:nth-of-type(${siblings.indexOf(element) + 1})` : ''
+
+  return `${tag}${classes}${suffix}`
+}
+
+function getNearestNamedParent(element) {
+  const namedParent = element.parentElement?.closest('[id], [class], [role], [aria-label], [name], [data-testid], [data-test]')
+
+  return namedParent ? buildElementSelector(namedParent) : ''
+}
+
+function getDomEnquiryText(element) {
+  const directText = normalizeText(
+    Array.from(element.childNodes)
+      .filter((node) => node.nodeType === Node.TEXT_NODE)
+      .map((node) => node.textContent || '')
+      .join(' '),
+  )
+
+  if (directText) {
+    return directText.slice(0, 180)
+  }
+
+  return normalizeText(
+    [
+      element.getAttribute('aria-label'),
+      element.getAttribute('placeholder'),
+      element.getAttribute('alt'),
+      element.getAttribute('title'),
+      element.value,
+    ]
+      .filter(Boolean)
+      .join(' '),
+  ).slice(0, 180)
+}
+
+function isElementRendered(rect, styles) {
+  return (
+    rect.width > 0 &&
+    rect.height > 0 &&
+    styles.display !== 'none' &&
+    styles.visibility !== 'hidden' &&
+    Number(styles.opacity) !== 0
+  )
+}
+
+function roundMetric(value) {
+  return Math.round(Number(value) * 100) / 100
+}
 
 function scanPage(mode = 'balanced') {
   const started = performance.now()

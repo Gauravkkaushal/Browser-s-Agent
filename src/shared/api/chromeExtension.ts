@@ -5,6 +5,7 @@ type ChromeTab = {
 }
 
 type TabMessage =
+  | { type: 'NETRASHIELD_DOM_ENQUIRY' }
   | { type: 'NETRASHIELD_SCAN' | 'NETRASHIELD_APPLY_MASKS' | 'NETRASHIELD_CLEAR_MASKS'; mode?: PrivacyMode }
   | { type: 'NETRASHIELD_EXECUTE_COMMAND'; mode?: PrivacyMode; command: AgentCommand }
 
@@ -18,7 +19,11 @@ type ChromeApi = {
   }
   tabs: {
     query: (queryInfo: { active: boolean; currentWindow: boolean }, callback: (tabs: ChromeTab[]) => void) => void
-    sendMessage: (tabId: number, message: TabMessage, callback: (response?: ScanResult | { ok: boolean }) => void) => void
+    sendMessage: (
+      tabId: number,
+      message: TabMessage,
+      callback: (response?: ScanResult | { ok: boolean; count?: number; url?: string; title?: string }) => void,
+    ) => void
   }
 }
 
@@ -35,7 +40,7 @@ export async function sendToActiveTab(message: TabMessage) {
     throw new Error('Build the app and load the dist folder as an unpacked Chrome extension.')
   }
 
-  return new Promise<ScanResult | { ok: boolean }>((resolve, reject) => {
+  return new Promise<ScanResult | { ok: boolean; count?: number; url?: string; title?: string }>((resolve, reject) => {
     chromeApi.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tabId = tabs[0]?.id
 

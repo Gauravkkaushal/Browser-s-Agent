@@ -79,6 +79,8 @@ export function useAgentRunner() {
     setTask('')
 
     try {
+      await sendToActiveTab({ type: 'NETRASHIELD_DOM_ENQUIRY' })
+
       const scanResponse = (await sendToActiveTab({ type: 'NETRASHIELD_SCAN', mode })) as ScanResult
       setScan(scanResponse)
       setStatus('ready')
