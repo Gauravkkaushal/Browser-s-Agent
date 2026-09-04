@@ -59,12 +59,34 @@
   font-size: 0.72rem;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .status-tag.ant-tag {
   margin: 0;
   border-radius: 999px;
   background: rgba(132, 184, 255, 0.14);
   color: #b8ceff;
   font-size: 0.7rem;
+}
+
+.settings-button.ant-btn {
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  background: rgba(30, 41, 59, 0.6);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.settings-button.ant-btn:hover {
+  color: #38bdf8 !important;
+  border-color: #38bdf8 !important;
+  background: rgba(56, 189, 248, 0.1) !important;
 }
 
 .hero-copy {

@@ -1,9 +1,11 @@
+import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { ArrowUpOutlined, BulbOutlined, MessageOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons'
+import { ArrowUpOutlined, BulbOutlined, MessageOutlined, PlusOutlined, SearchOutlined, SettingOutlined } from '@ant-design/icons'
 import { Button, Input, Select, Tag, Typography } from 'antd'
 import type { ChatMessage } from '../../features/agent-runner/model'
 import { privacyModes } from '../../entities/mode/model'
 import type { PrivacyMode } from '../../shared/types/netrashield'
+import { SettingsDrawer } from '../settings/SettingsDrawer'
 import './ChatShell.css'
 
 type ChatShellProps = {
@@ -33,6 +35,8 @@ export function ChatShell({
   onTaskChange,
   suggestions,
 }: ChatShellProps) {
+  const [settingsOpen, setSettingsOpen] = useState(false)
+
   const modeOptions = privacyModes.map((privacyMode) => ({
     label: privacyMode.title,
     value: privacyMode.id,
@@ -50,10 +54,26 @@ export function ChatShell({
             <Typography.Text className="brand-subtitle">Private page assistant</Typography.Text>
           </div>
         </div>
-        <Tag className="status-tag" bordered={false}>
-          {isRunning ? 'Working' : 'Ready'}
-        </Tag>
+        <div className="header-actions">
+          <Tag className="status-tag" bordered={false}>
+            {isRunning ? 'Working' : 'Ready'}
+          </Tag>
+          <Button
+            aria-label="Open Settings"
+            className="settings-button"
+            icon={<SettingOutlined />}
+            onClick={() => setSettingsOpen(true)}
+            shape="circle"
+            size="small"
+            type="text"
+          />
+        </div>
       </section>
+
+      <SettingsDrawer
+        onClose={() => setSettingsOpen(false)}
+        open={settingsOpen}
+      />
 
       <section className="hero-copy" aria-label="Greeting">
         <Typography.Title level={1}>

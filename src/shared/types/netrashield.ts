@@ -2,6 +2,14 @@ export type PrivacyMode = 'strict' | 'balanced' | 'fast'
 export type ScanStatus = 'idle' | 'scanning' | 'ready' | 'error'
 export type ReasonStatus = 'idle' | 'thinking' | 'ready' | 'error'
 
+export type ReasoningEngine = 'auto' | 'onnx' | 'server'
+
+export type UserSettings = {
+  reasoningEngine: ReasoningEngine
+  serverUrl: string
+  privacyMode: PrivacyMode
+}
+
 export type SensitiveRegion = {
   id: string
   label: string
@@ -75,7 +83,7 @@ export type AgentCommand = {
 
 export type ReasonResult = {
   ok: boolean
-  source: 'server' | 'extension-fallback'
+  source: 'server' | 'extension-fallback' | 'local-onnx'
   command: AgentCommand
   rationale?: string
   error?: string

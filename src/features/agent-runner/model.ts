@@ -27,11 +27,11 @@ export function useAgentRunner() {
 
   const statusText = useMemo(() => {
     if (status === 'scanning') {
-      return 'Inspecting page privately...'
+      return 'Inspecting page & masking sensitive data...'
     }
 
     if (reasonStatus === 'thinking') {
-      return 'Thinking with masked context...'
+      return 'Running local ONNX model on masked context...'
     }
 
     if (status === 'error' || reasonStatus === 'error') {
