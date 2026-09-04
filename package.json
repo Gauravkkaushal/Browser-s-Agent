@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "server": "node server/demo-server.mjs",
+    "server": "uvicorn server.main:app --port 8787 --reload",
+    "server:node": "node server/demo-server.mjs",
     "build:model": "node scripts/build-onnx-model.mjs",
     "build": "tsc -b && vite build",
     "test": "vitest run",
