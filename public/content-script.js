@@ -39,7 +39,7 @@ let lastScan = null
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'NETRASHIELD_DOM_ENQUIRY') {
     const enquiry = collectDomEnquiry()
-    logDomEnquiry(enquiry)
+    logDomEnquiry(enquiry, message.task)
     sendResponse({
       ok: true,
       count: enquiry.elements.length,
@@ -185,7 +185,7 @@ function collectDomEnquiry() {
   }
 }
 
-function logDomEnquiry(enquiry) {
+function logDomEnquiry(enquiry, task = '') {
   const visibleElements = enquiry.elements.filter((element) => element.visibility.visible && element.text)
   const printableEnquiry = {
     ...enquiry,
@@ -212,8 +212,9 @@ function logDomEnquiry(enquiry) {
   }))
 
   console.groupCollapsed(
-    `[NetraShield DOM enquiry] ${visibleElements.length} visible elements - ${enquiry.page.url}`,
+    `[NetraShield DOM enquiry] Task: "${task || 'manual enquiry'}" - ${visibleElements.length} visible elements - ${enquiry.page.url}`,
   )
+  console.log('Submitted task:', task || '(none)')
   console.log('Visible DOM enquiry object:', printableEnquiry)
   console.table(tableRows)
   console.groupEnd()

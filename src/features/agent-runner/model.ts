@@ -75,7 +75,8 @@ export function useAgentRunner() {
     setTask('')
 
     try {
-      await sendToActiveTab({ type: 'NETRASHIELD_DOM_ENQUIRY' })
+      const domEnquiry = await sendToActiveTab({ type: 'NETRASHIELD_DOM_ENQUIRY', task: cleanTask })
+      console.log('[NetraShield Popup] DOM enquiry completed for task:', cleanTask, domEnquiry)
 
       const scanResponse = (await sendToActiveTab({ type: 'NETRASHIELD_SCAN', mode })) as ScanResult
       setScan(scanResponse)
