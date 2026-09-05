@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import type { FormEvent } from 'react'
-import { ArrowUpOutlined, BulbOutlined, MessageOutlined, PlusOutlined, SearchOutlined, SettingOutlined } from '@ant-design/icons'
-import { Button, Input, Select, Tag, Typography } from 'antd'
+import type { FormEvent, KeyboardEvent } from 'react'
+import { ArrowUpOutlined, PlusOutlined, SettingOutlined } from '@ant-design/icons'
+import { Button, Input, Select, Typography } from 'antd'
 import type { ChatMessage } from '../../features/agent-runner/model'
 import { privacyModes } from '../../entities/mode/model'
 import type { PrivacyMode } from '../../shared/types/netrashield'
@@ -17,9 +17,7 @@ type ChatShellProps = {
   task: string
   onModeChange: (mode: PrivacyMode) => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
-  onSuggestion: (suggestion: string) => void
   onTaskChange: (task: string) => void
-  suggestions: string[]
 }
 
 export function ChatShell({
@@ -31,9 +29,7 @@ export function ChatShell({
   task,
   onModeChange,
   onSubmit,
-  onSuggestion,
   onTaskChange,
-  suggestions,
 }: ChatShellProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
 
@@ -41,6 +37,20 @@ export function ChatShell({
     label: privacyMode.title,
     value: privacyMode.id,
   }))
+
+  function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== 'Enter' || event.shiftKey) {
+      return
+    }
+
+    event.preventDefault()
+
+    if (isRunning || !task.trim()) {
+      return
+    }
+
+    event.currentTarget.form?.requestSubmit()
+  }
 
   return (
     <main className="chat-popup" aria-label="NetraShield assistant">
@@ -54,20 +64,6 @@ export function ChatShell({
             <Typography.Text className="brand-subtitle">Private page assistant</Typography.Text>
           </div>
         </div>
-        <div className="header-actions">
-          <Tag className="status-tag" bordered={false}>
-            {isRunning ? 'Working' : 'Ready'}
-          </Tag>
-          <Button
-            aria-label="Open Settings"
-            className="settings-button"
-            icon={<SettingOutlined />}
-            onClick={() => setSettingsOpen(true)}
-            shape="circle"
-            size="small"
-            type="text"
-          />
-        </div>
       </section>
 
       <SettingsDrawer
@@ -75,15 +71,17 @@ export function ChatShell({
         open={settingsOpen}
       />
 
-      <section className="hero-copy" aria-label="Greeting">
-        <Typography.Title level={1}>
-          <span>Hello, Gaurav.</span>
-          What should we handle on this page?
-        </Typography.Title>
-        <Typography.Paragraph>
-          Ask naturally. Sensitive fields are masked locally before any reasoning starts.
-        </Typography.Paragraph>
-      </section>
+      {messages.length === 0 && !isRunning && (
+        <section className="hero-copy" aria-label="Greeting">
+          <Typography.Title level={1}>
+            <span>Hello, Gaurav.</span>
+            What should we handle on this page?
+          </Typography.Title>
+          <Typography.Paragraph>
+            Ask naturally. Sensitive fields are masked locally before any reasoning starts.
+          </Typography.Paragraph>
+        </section>
+      )}
 
       {(messages.length > 0 || isRunning) && (
         <section className="chat-thread" aria-label="Conversation">
@@ -96,20 +94,6 @@ export function ChatShell({
         </section>
       )}
 
-      <section className="starter-list" aria-label="Suggestions">
-        {suggestions.map((suggestion) => (
-          <Button
-            className="suggestion-button"
-            icon={getSuggestionIcon(suggestion)}
-            key={suggestion}
-            onClick={() => onSuggestion(suggestion)}
-            type="text"
-          >
-            {suggestion}
-          </Button>
-        ))}
-      </section>
-
       <form className="composer" onSubmit={onSubmit}>
         <Input.TextArea
           aria-label="Ask NetraShield"
@@ -117,11 +101,22 @@ export function ChatShell({
           className="composer-input"
           maxLength={240}
           onChange={(event) => onTaskChange(event.target.value)}
+          onKeyDown={handleComposerKeyDown}
           placeholder="Ask NetraShield to inspect, explain, or guide..."
           value={task}
         />
         <div className="composer-actions">
-          <Button className="context-button" icon={<PlusOutlined />} shape="circle" type="text" aria-label="Add context" />
+          <div className="composer-tools">
+            <Button className="context-button" icon={<PlusOutlined />} shape="circle" type="text" aria-label="Add context" />
+            <Button
+              aria-label="Open Settings"
+              className="settings-button"
+              icon={<SettingOutlined />}
+              onClick={() => setSettingsOpen(true)}
+              shape="circle"
+              type="text"
+            />
+          </div>
           <Select
             aria-label="Privacy mode"
             className="mode-select"
@@ -146,16 +141,4 @@ export function ChatShell({
       {!extensionReady && <p className="dev-note">Load the built dist folder as an unpacked Chrome extension.</p>}
     </main>
   )
-}
-
-function getSuggestionIcon(suggestion: string) {
-  if (suggestion.includes('questions')) {
-    return <SearchOutlined />
-  }
-
-  if (suggestion.includes('Discuss')) {
-    return <MessageOutlined />
-  }
-
-  return <BulbOutlined />
 }

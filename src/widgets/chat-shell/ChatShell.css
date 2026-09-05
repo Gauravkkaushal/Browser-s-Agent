@@ -3,12 +3,13 @@
   display: flex;
   flex-direction: column;
   width: 390px;
-  min-height: 600px;
-  max-height: 640px;
+  height: 600px;
+  min-height: 0;
+  max-height: 600px;
   margin-left: auto;
   overflow: hidden;
   border: 1px solid #242833;
-  border-radius: 14px;
+  border-radius: 0;
   background:
     radial-gradient(circle at 12% 0%, rgba(58, 104, 178, 0.22), transparent 34%),
     linear-gradient(180deg, #14171e 0%, #0f1116 100%);
@@ -18,7 +19,7 @@
 .assistant-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   padding: 16px 18px 8px;
 }
 
@@ -57,20 +58,6 @@
 .brand-subtitle.ant-typography {
   color: #8d95a6;
   font-size: 0.72rem;
-}
-
-.header-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.status-tag.ant-tag {
-  margin: 0;
-  border-radius: 999px;
-  background: rgba(132, 184, 255, 0.14);
-  color: #b8ceff;
-  font-size: 0.7rem;
 }
 
 .settings-button.ant-btn {
@@ -118,11 +105,33 @@
 .chat-thread {
   display: flex;
   flex-direction: column;
+  flex: 1;
   gap: 8px;
   min-height: 0;
-  max-height: 136px;
+  max-height: none;
   overflow: auto;
-  padding: 0 20px 10px;
+  padding: 18px 16px 10px 20px;
+  scrollbar-color: #385fba rgba(255, 255, 255, 0.05);
+  scrollbar-width: thin;
+}
+
+.chat-thread::-webkit-scrollbar {
+  width: 8px;
+}
+
+.chat-thread::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.chat-thread::-webkit-scrollbar-thumb {
+  border: 2px solid #11141b;
+  border-radius: 999px;
+  background: #385fba;
+}
+
+.chat-thread::-webkit-scrollbar-thumb:hover {
+  background: #4c78df;
 }
 
 .message {
@@ -148,38 +157,6 @@
 
 .message.pending {
   color: #b9cfff;
-}
-
-.starter-list {
-  display: grid;
-  gap: 9px;
-  padding: 4px 18px 16px;
-}
-
-.suggestion-button.ant-btn {
-  justify-content: flex-start;
-  width: fit-content;
-  max-width: 100%;
-  min-height: 42px;
-  padding: 0 14px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-  color: #f4efe7;
-  font-size: 0.9rem;
-  font-weight: 650;
-  text-align: left;
-}
-
-.suggestion-button.ant-btn .anticon {
-  color: #9abaff;
-}
-
-.suggestion-button.ant-btn:hover,
-.suggestion-button.ant-btn:focus-visible {
-  border-color: rgba(154, 186, 255, 0.26);
-  background: rgba(154, 186, 255, 0.12);
-  color: #ffffff;
 }
 
 .composer {
@@ -218,15 +195,25 @@
 
 .composer-actions {
   display: grid;
-  grid-template-columns: 38px 1fr 38px;
+  grid-template-columns: auto 1fr 32px;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+}
+
+.composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .context-button.ant-btn,
+.settings-button.ant-btn,
 .send-button.ant-btn {
-  width: 36px;
-  height: 36px;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  padding: 0;
+  font-size: 0.82rem;
 }
 
 .context-button.ant-btn {
@@ -259,20 +246,20 @@
 
 .mode-select.ant-select {
   justify-self: end;
-  width: 126px;
+  width: 96px;
 }
 
 .mode-select .ant-select-selector {
-  min-height: 36px;
+  min-height: 30px;
   border-radius: 8px;
   background: #1b202a;
 }
 
 .mode-select .ant-select-selection-item {
   color: #f4efe7;
-  font-size: 0.86rem;
+  font-size: 0.78rem;
   font-weight: 650;
-  line-height: 36px;
+  line-height: 30px;
 }
 
 .mode-select .ant-select-arrow {

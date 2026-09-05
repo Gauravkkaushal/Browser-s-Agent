@@ -56,10 +56,6 @@ export function useAgentRunner() {
     setError('')
   }
 
-  function applySuggestion(suggestion: string) {
-    updateTask(suggestion)
-  }
-
   async function runAgent(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault()
 
@@ -126,7 +122,6 @@ export function useAgentRunner() {
     status,
     statusText,
     task,
-    applySuggestion,
     runAgent,
     setMode,
     updateTask,
