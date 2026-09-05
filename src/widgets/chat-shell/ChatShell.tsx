@@ -64,6 +64,15 @@ export function ChatShell({
             <Typography.Text className="brand-subtitle">Private page assistant</Typography.Text>
           </div>
         </div>
+        <Button
+          aria-label="Open Settings"
+          className="settings-button"
+          icon={<SettingOutlined />}
+          onClick={() => setSettingsOpen(true)}
+          shape="circle"
+          size="small"
+          type="text"
+        />
       </section>
 
       <SettingsDrawer
