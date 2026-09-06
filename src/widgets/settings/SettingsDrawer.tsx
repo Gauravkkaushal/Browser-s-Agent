@@ -218,6 +218,31 @@ export function SettingsDrawer({ open, onClose, onSettingsChanged }: SettingsDra
 
         <Divider className="settings-divider" />
 
+        {/* Summary Language Preference */}
+        <section className="settings-section">
+          <Typography.Text className="section-label">Summary & Assistant Language</Typography.Text>
+          <Typography.Paragraph className="section-hint">
+            Select the preferred language for on-device page summaries and guidance.
+          </Typography.Paragraph>
+
+          <Radio.Group
+            onChange={(e) => {
+              const updated = { ...settings, summaryLanguage: e.target.value }
+              setSettings(updated)
+              saveSettings(updated)
+              onSettingsChanged?.(updated)
+            }}
+            value={settings.summaryLanguage || 'en'}
+            style={{ width: '100%', display: 'flex', gap: '8px' }}
+          >
+            <Radio.Button value="en" style={{ flex: 1, textAlign: 'center' }}>English</Radio.Button>
+            <Radio.Button value="hi" style={{ flex: 1, textAlign: 'center' }}>हिन्दी (Hindi)</Radio.Button>
+            <Radio.Button value="hinglish" style={{ flex: 1, textAlign: 'center' }}>Hinglish</Radio.Button>
+          </Radio.Group>
+        </section>
+
+        <Divider className="settings-divider" />
+
         {/* Model & System Specifications */}
         <section className="settings-section">
           <Typography.Text className="section-label">Active Model Specs</Typography.Text>

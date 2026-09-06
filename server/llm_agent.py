@@ -189,39 +189,64 @@ async def _call_ollama(payload: AgentRequestPayload) -> ReasonResponse:
         )
 
 def _rule_based_reasoning(payload: AgentRequestPayload) -> ReasonResponse:
-    """Smart Semantic Rule-Based Reasoning Planner for zero-leak instant execution and summarization."""
+    """Smart Semantic Rule-Based Reasoning Planner for zero-leak instant execution and multi-lingual summarization."""
     task = (payload.task or "").lower()
     elements = payload.elements or []
+    lang = (payload.lang or "en").lower()
 
     # Check if user wants a summary / page overview / info
-    summary_pattern = re.compile(r"summar(y|ise|ize)|what is|tell me|explain|overview|about|read|who is|detail", re.I)
+    summary_pattern = re.compile(r"summar(y|ise|ize)|what is|tell me|explain|overview|about|read|who is|detail|kya hai|batao|hindi", re.I)
     if summary_pattern.search(task):
         title = payload.page.titleHint if payload.page else "Current Web Page"
         origin = payload.page.origin if payload.page else ""
         page_text = (payload.pageText or "").strip()
-
-        summary_lines = [f"📄 **Page Summary:** {title}"]
-        if origin and origin != "about:blank":
-            summary_lines.append(f"🌐 **Site:** {origin}")
-
-        if page_text:
-            content_snippets = [s.strip() for s in page_text.split("\n") if s.strip()]
-            summary_lines.append("\n**Key Insights (Sanitized):**")
-            for snippet in content_snippets[:4]:
-                summary_lines.append(f"• {snippet}")
-        else:
-            interactive_roles = {}
-            for el in elements:
-                interactive_roles[el.role] = interactive_roles.get(el.role, 0) + 1
-            roles_desc = ", ".join(f"{count} {role}s" for role, count in interactive_roles.items())
-            summary_lines.append(f"• Interactive Structure: Contains {roles_desc or 'standard web elements'}.")
-
         pii_count = (
             payload.privacySummary.regionCount
             if payload.privacySummary
             else len(payload.redactions)
         )
-        summary_lines.append(f"\n🛡️ *NetraShield Zero-Leak: {pii_count} sensitive fields protected on-device.*")
+
+        if lang == "hi" or "hindi" in task:
+            summary_lines = [f"📄 **पेज सारांश (NetraShield):** {title}"]
+            if origin and origin != "about:blank":
+                summary_lines.append(f"🌐 **वेबसाइट लिंक:** {origin}")
+            if page_text:
+                content_snippets = [s.strip() for s in page_text.split("\n") if s.strip()]
+                summary_lines.append("\n**मुख्य मुख्य बिंदु (संरक्षित डेटा):**")
+                for snippet in content_snippets[:4]:
+                    summary_lines.append(f"• {snippet}")
+            else:
+                summary_lines.append(f"• पेज संरचना: {len(elements)} इंटरैक्टिव तत्व उपलब्ध हैं।")
+            summary_lines.append(f"\n🛡️ *NetraShield Zero-Leak: {pii_count} संवेदनशील फ़ील्ड्स (Aadhaar/PAN/Phone) सुरक्षित रखे गए हैं।*")
+        elif lang == "hinglish" or "hinglish" in task:
+            summary_lines = [f"📄 **Page Summary (Hinglish):** {title}"]
+            if origin and origin != "about:blank":
+                summary_lines.append(f"🌐 **Website:** {origin}")
+            if page_text:
+                content_snippets = [s.strip() for s in page_text.split("\n") if s.strip()]
+                summary_lines.append("\n**Key Points & Overview (Sanitized):**")
+                for snippet in content_snippets[:4]:
+                    summary_lines.append(f"• {snippet}")
+            else:
+                summary_lines.append(f"• Page Structure: Total {len(elements)} interactive buttons/fields mile hain.")
+            summary_lines.append(f"\n🛡️ *NetraShield Zero-Leak: {pii_count} sensitive fields on-device securely shield kiye gaye hain.*")
+        else:
+            summary_lines = [f"📄 **Page Summary:** {title}"]
+            if origin and origin != "about:blank":
+                summary_lines.append(f"🌐 **Site:** {origin}")
+            if page_text:
+                content_snippets = [s.strip() for s in page_text.split("\n") if s.strip()]
+                summary_lines.append("\n**Key Insights (Sanitized):**")
+                for snippet in content_snippets[:4]:
+                    summary_lines.append(f"• {snippet}")
+            else:
+                interactive_roles = {}
+                for el in elements:
+                    interactive_roles[el.role] = interactive_roles.get(el.role, 0) + 1
+                roles_desc = ", ".join(f"{count} {role}s" for role, count in interactive_roles.items())
+                summary_lines.append(f"• Interactive Structure: Contains {roles_desc or 'standard web elements'}.")
+            summary_lines.append(f"\n🛡️ *NetraShield Zero-Leak: {pii_count} sensitive fields protected on-device.*")
+
         summary_text = "\n".join(summary_lines)
 
         return ReasonResponse(
@@ -232,7 +257,7 @@ def _rule_based_reasoning(payload: AgentRequestPayload) -> ReasonResponse:
                 targetId="",
                 instruction=summary_text,
             ),
-            rationale="Identified informational/summary intent. Provided structured overview with zero raw PII exposure.",
+            rationale=f"Identified informational/summary intent (language: {lang}). Provided structured overview with zero raw PII exposure.",
         )
 
     # Intent keyword matching matching our 8 classes
