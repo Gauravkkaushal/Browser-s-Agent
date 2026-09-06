@@ -149,6 +149,18 @@ async def start_task(body: StartBody):
     return {"task_id": task.task_id, "state": task.state}
 
 
+@app.get("/agent-content.js")
+async def serve_walker():
+    """Serve the content script so the perception layer can be exercised in any
+    page without loading the extension. Handy for verifying the walker, the
+    redaction pass and `extract` against a real DOM."""
+    path = Path(__file__).parent.parent / "public" / "agent-content.js"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="agent-content.js not built")
+    return PlainTextResponse(path.read_text(encoding="utf-8"),
+                             media_type="application/javascript")
+
+
 # --- fixtures used by the policy demonstration -----------------------------
 @app.get("/fixtures/payment", response_class=HTMLResponse)
 async def fixture_payment():
@@ -163,6 +175,90 @@ async def fixture_pii():
 @app.get("/fixtures/shop", response_class=HTMLResponse)
 async def fixture_shop():
     return HTMLResponse(_read(FIXTURES, "shop.html"))
+
+
+@app.get("/fixtures/upload", response_class=HTMLResponse)
+async def fixture_upload():
+    return HTMLResponse(_read(FIXTURES, "upload.html"))
+
+
+# --- credential vault -------------------------------------------------------
+# Values arrive from the operator's own browser on localhost and go straight to
+# the local vault file. They are never returned by any endpoint, never logged,
+# and never placed in a model prompt.
+class CredentialEntry(BaseModel):
+    name: str
+    match_url: str
+    label: str = ""
+    fields: Dict[str, str]
+
+
+@app.get("/credentials")
+async def list_credentials():
+    """Slot names and their site bindings. Never any values."""
+    from .vault import VAULT_PATH, vault
+    vault.load()
+    return {"file": str(VAULT_PATH), "slots": vault.describe()}
+
+
+@app.post("/credentials")
+async def save_credential(entry: CredentialEntry):
+    from .vault import VAULT_PATH, vault
+    name = entry.name.strip()
+    match = entry.match_url.strip().lower()
+    if not name or not match:
+        raise HTTPException(status_code=400, detail="name and match_url are required")
+    if not entry.fields:
+        raise HTTPException(status_code=400, detail="at least one field is required")
+
+    data: Dict[str, Any] = {}
+    if VAULT_PATH.exists():
+        try:
+            data = json.loads(VAULT_PATH.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            data = {}
+    data[name] = {
+        "match_url": match,
+        "label": entry.label or name,
+        "fields": {k: v for k, v in entry.fields.items() if v},
+    }
+    VAULT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    VAULT_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    vault.load()
+    return {"ok": True, "slots": vault.describe()}
+
+
+@app.delete("/credentials/{name}")
+async def delete_credential(name: str):
+    from .vault import VAULT_PATH, vault
+    if not VAULT_PATH.exists():
+        raise HTTPException(status_code=404, detail="no vault file")
+    try:
+        data = json.loads(VAULT_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail="vault file is corrupt") from exc
+    if name not in data:
+        raise HTTPException(status_code=404, detail="no entry named %s" % name)
+    del data[name]
+    VAULT_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    vault.load()
+    return {"ok": True, "slots": vault.describe()}
+
+
+class BridgeCall(BaseModel):
+    op: str
+    args: Dict[str, Any] = {}
+
+
+@app.post("/debug/bridge")
+async def debug_bridge(body: BridgeCall):
+    """Run one bridge operation directly. A local diagnostic tool: it is how you
+    check the browser side without spending a model call on it."""
+    from .browser_bridge import BridgeError
+    try:
+        return {"ok": True, "result": await bridge.request(body.op, body.args)}
+    except BridgeError as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +354,7 @@ async def _handle_cockpit_message(msg: Dict[str, Any], socket: WebSocket) -> Non
             })
             return
         try:
-            await registry.start(command)
+            await registry.start(command, pre_approved=bool(payload.get("pre_approved")))
         except RuntimeError as exc:
             await bus.emit("ERROR", {"error": str(exc)})
         return

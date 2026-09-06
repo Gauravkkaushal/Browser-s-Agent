@@ -73,6 +73,13 @@
            margin-top:5px; word-break:break-all; }
   .reason { color:var(--dim); font-size:11.5px; }
 
+  .optbar { padding:7px 18px 10px; border-bottom:1px solid var(--line); background:var(--panel);
+            display:flex; align-items:center; gap:11px; flex-shrink:0; font-size:12px; }
+  .optbar label { display:flex; align-items:center; gap:7px; color:var(--text); cursor:pointer; }
+  .optbar input { accent-color:var(--warn); width:14px; height:14px; cursor:pointer; }
+  .optbar .hint { color:var(--dim); font-size:11.5px; }
+  .optbar .hint.armed { color:var(--warn); font-weight:600; }
+
   #banner { display:none; padding:12px 18px; background:#3a2a08; border-bottom:1px solid #6b4c0a;
             color:#f0c674; font-size:13px; font-weight:600; flex-shrink:0; }
 
@@ -117,6 +124,14 @@
          autocomplete="off">
   <button class="primary" id="run">Run</button>
   <button class="danger" id="cancel" disabled>Cancel</button>
+</div>
+
+<div class="optbar">
+  <label title="High-risk actions are still classified and still logged - you just answer once, up front, instead of per action.">
+    <input type="checkbox" id="preapprove" checked>
+    Pre-approve this task's high-risk actions (sending, posting, paying)
+  </label>
+  <span class="hint" id="preapprove-hint">off - the agent will stop and ask before anything irreversible</span>
 </div>
 
 <main>
@@ -410,11 +425,22 @@
     };
   }
 
+  var preapprove = document.getElementById('preapprove');
+  preapprove.onchange = function () {
+    var h = document.getElementById('preapprove-hint');
+    h.textContent = preapprove.checked
+      ? 'ARMED - high-risk actions run without stopping, and every one is still logged'
+      : 'off - the agent will stop and ask before anything irreversible';
+    h.className = 'hint' + (preapprove.checked ? ' armed' : '');
+  };
+  preapprove.onchange();
+
+
   document.getElementById('run').onclick = function () {
     var v = document.getElementById('cmd').value.trim();
     if (!v) return;
     document.getElementById('run').disabled = true;
-    send('TASK_CREATE', { command: v });
+    send('TASK_CREATE', { command: v, pre_approved: preapprove.checked });
   };
   document.getElementById('cmd').addEventListener('keydown', function (e) {
     if (e.key === 'Enter') document.getElementById('run').click();
@@ -422,6 +448,15 @@
   document.getElementById('cancel').onclick = function () {
     send('TASK_CANCEL', { task_id: activeTask });
   };
+
+  // The popup can hand us a command to prefill via the URL fragment.
+  if (location.hash.length > 1) {
+    try {
+      document.getElementById('cmd').value = decodeURIComponent(location.hash.slice(1));
+    } catch (e) { /* leave it empty */ }
+    history.replaceState(null, '', location.pathname);
+  }
+  document.getElementById('cmd').focus();
 
   connect();
   setInterval(function () { send('PING', {}); }, 25000);

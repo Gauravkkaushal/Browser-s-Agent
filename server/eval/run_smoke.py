@@ -71,6 +71,33 @@ def _pct(num: int, den: int) -> str:
     return "n/a" if den == 0 else "%.0f%% (%d/%d)" % (100.0 * num / den, num, den)
 
 
+TERMINAL_STATES = {"COMPLETED", "FAILED", "CANCELLED"}
+
+
+async def wait_until_idle(timeout_s: float = 90.0) -> None:
+    """Block until the server has no task in flight."""
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    async with httpx.AsyncClient(timeout=10.0) as c:
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                health = (await c.get(BASE_HTTP + "/health")).json()
+                active = health.get("active_task")
+                if not active:
+                    return
+                snap = (await c.get("%s/tasks/%s" % (BASE_HTTP, active))).json()
+                if snap.get("state") in TERMINAL_STATES:
+                    return
+                # Still going: ask it to stop, then keep waiting.
+                async with websockets.connect(BASE_WS + "/ws/cockpit") as ws:
+                    await asyncio.wait_for(ws.recv(), 10)
+                    await ws.send(json.dumps({
+                        "v": 1, "type": "TASK_CANCEL", "payload": {"task_id": active},
+                    }))
+            except (httpx.HTTPError, OSError, ValueError, asyncio.TimeoutError):
+                return
+            await asyncio.sleep(1.5)
+
+
 async def run_task(spec: Dict[str, Any]) -> Dict[str, Any]:
     m = Metrics()
     events: List[Dict[str, Any]] = []
@@ -248,6 +275,10 @@ async def main() -> int:
 
     results = []
     for spec in tasks:
+        # One browser, one task at a time. Starting the next before the server
+        # has finished the previous makes every remaining task fail for a
+        # bookkeeping reason rather than a real one.
+        await wait_until_idle()
         print("\n>>> %s" % spec["id"])
         print("    %s" % spec["command"])
         res = await run_task(spec)

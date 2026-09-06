@@ -120,3 +120,39 @@ describe('extraction gate G4 - urls must exist in the live DOM', () => {
     expect(SOURCE).toContain('if (list.length < 3) continue')
   })
 })
+
+describe('clicking hits what the pointer is actually over', () => {
+  it('dispatches on the inner node when one sits under the click point', () => {
+    // Application UIs put the handler on a descendant of the row/card, so a
+    // click aimed only at the container never reaches the listener.
+    expect(SOURCE).toContain('document.elementFromPoint(pt.x, pt.y)')
+    expect(SOURCE).toContain('if (el.contains(top)) {')
+    expect(SOURCE).toContain('target = top')
+  })
+
+  it('reports an unrelated element covering the target instead of clicking it', () => {
+    expect(SOURCE).toContain('occludedBy =')
+    expect(SOURCE).toContain('occluded_by: occludedBy')
+  })
+
+  it('falls back to a native click when the synthetic sequence changed nothing', () => {
+    expect(SOURCE).toContain('native_fallback: usedNativeFallback')
+    expect(SOURCE).toContain('clickable.click()')
+  })
+
+  it('says which node it actually dispatched on, for the audit trail', () => {
+    expect(SOURCE).toContain('dispatched_on:')
+  })
+})
+
+describe('the walker ranks before it caps', () => {
+  it('scores on-screen and editable elements above bulk list rows', () => {
+    expect(SOURCE).toContain('if (onScreen) score += 1000')
+    expect(SOURCE).toContain('if (editable) score += 400')
+    expect(SOURCE).toContain("if (role === 'listitem' || role === 'row' || role === 'gridcell') score -= 20")
+  })
+
+  it('sorts by that score so a composer is never cut off by a long sidebar', () => {
+    expect(SOURCE).toContain('scored.sort((a, b) => b.score - a.score')
+  })
+})

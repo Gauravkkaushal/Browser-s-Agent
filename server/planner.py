@@ -17,11 +17,22 @@ Produce a SHORT ordered plan: the fewest steps that actually accomplish the
 command. Each step is a goal expressed in terms of what the user would see, plus
 a done_when describing the observable evidence that the step succeeded.
 
+OPEN-ENDED COMMANDS
+Some commands cannot be planned properly yet, because the real objective is
+written somewhere the agent has not read: "do what he asked me to", "handle
+whatever is in my inbox", "complete the assignment that is due". For these,
+make step 1 READ the thing, and say plainly in `notes` that the plan will be
+rewritten once the real request is known. Do not guess at the content.
+
+The agent may work across several sites in one task: read a request in one
+place, gather or produce what it needs somewhere else, and come back to deliver
+it. Plan that whole journey when the command implies it.
+
 Rules:
 - Never write CSS selectors, coordinates, or code. Steps are goals, not clicks.
 - If the task needs a starting website, set start_url to a full https:// URL.
 - If the site will require signing in, do NOT plan a sign-in step: the agent
-  detects login walls on its own and waits for the human.
+  detects login walls on its own and handles them.
 - Actions that send, buy, pay, post or delete are irreversible; make them their
   own final step so the human can approve them.
 - 3 to 8 steps. Be concrete about what data must be gathered.
@@ -32,11 +43,24 @@ Return JSON exactly:
  "notes": "..."}"""
 
 
-async def make_plan(command: str, task_id: str, current_url: str = "") -> Plan:
-    user = "User command:\n%s\n\nThe browser is currently on: %s" % (
-        command, current_url or "(unknown)",
-    )
-    data = await llm.call("planner", SYSTEM, user, task_id=task_id, step=0)
+async def make_plan(command: str, task_id: str, current_url: str = "",
+                    discovered: str = "", done_so_far: str = "",
+                    step: int = 0) -> Plan:
+    """Build a plan. Called again mid-task once the real objective is known."""
+    parts = [
+        "User command:\n%s" % command,
+        "The browser is currently on: %s" % (current_url or "(unknown)"),
+    ]
+    if discovered:
+        parts.append(
+            "The agent has since READ the actual request. This is what the task "
+            "really is:\n%s\n\nPlan the remaining work to carry it out. Do not "
+            "re-plan what is already done." % discovered
+        )
+    if done_so_far:
+        parts.append("Already completed:\n%s" % done_so_far)
+    user = "\n\n".join(parts)
+    data = await llm.call("planner", SYSTEM, user, task_id=task_id, step=step)
 
     steps = []
     for i, raw in enumerate(data.get("steps") or [], start=1):

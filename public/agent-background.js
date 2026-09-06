@@ -15,7 +15,8 @@ const DEFAULT_SERVER = 'ws://127.0.0.1:8787/ws/agent'
 const KEEPALIVE_MS = 20000
 const BACKOFF_MIN_MS = 1500
 const BACKOFF_MAX_MS = 3000
-const NAV_TIMEOUT_MS = 25000
+// Slow sites are common; a navigation that takes 40s is slow, not broken.
+const NAV_TIMEOUT_MS = 60000
 
 let ws = null
 let keepaliveTimer = null
@@ -25,7 +26,21 @@ let connected = false
 
 /** Tab the agent is currently driving, and tabs the agent itself opened. */
 let currentTabId = null
+// Ordered newest-first: after a service-worker restart the agent must resume in
+// the tab it was most recently driving, not the oldest one it ever opened.
 const agentOwnedTabs = new Set()
+async function rememberCurrentTab(tabId) {
+  currentTabId = tabId
+  try { await chrome.storage.session.set({ agentCurrentTab: tabId }) } catch (e) { /* ignore */ }
+}
+async function recallCurrentTab() {
+  if (currentTabId != null) return currentTabId
+  try {
+    const v = await chrome.storage.session.get('agentCurrentTab')
+    if (v && v.agentCurrentTab != null) currentTabId = v.agentCurrentTab
+  } catch (e) { /* ignore */ }
+  return currentTabId
+}
 const debuggerAttached = new Set()
 
 // ---------------------------------------------------------------------------
@@ -163,26 +178,53 @@ function setBadge(text, color) {
 // ---------------------------------------------------------------------------
 async function resolveTabId(requested) {
   if (requested) return requested
+  await recallCurrentTab()
+
+  // 1. The tab this task has been working in, if it still exists and is usable.
   if (currentTabId != null) {
     try {
-      await chrome.tabs.get(currentTabId)
-      return currentTabId
+      const tab = await chrome.tabs.get(currentTabId)
+      if (isInjectable(tab.url)) return currentTabId
+    } catch (e) { /* the tab is gone */ }
+    currentTabId = null
+  }
+
+  // 2. A tab the agent opened itself -- most recent first.
+  for (const id of Array.from(agentOwnedTabs).reverse()) {
+    try {
+      const tab = await chrome.tabs.get(id)
+      if (isInjectable(tab.url)) {
+        await rememberCurrentTab(id)
+        return id
+      }
     } catch (e) {
-      currentTabId = null
+      agentOwnedTabs.delete(id)
     }
   }
+
+  // 3. The user's active tab -- but ONLY if an extension can actually run
+  // there. chrome://, the Web Store and PDF viewers are closed to us, and
+  // silently adopting one of those makes every later step fail for a reason
+  // that has nothing to do with the task.
   const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
-  if (active) {
+  if (active && isInjectable(active.url)) {
     currentTabId = active.id
     return active.id
   }
+
+  // 4. Any other ordinary web page.
   const any = await chrome.tabs.query({})
-  const usable = any.find((t) => /^https?:/.test(t.url || ''))
+  const usable = any.find((t) => isInjectable(t.url))
   if (usable) {
     currentTabId = usable.id
     return usable.id
   }
-  throw new Error('no usable tab available')
+
+  throw new Error(
+    'no ordinary web page is open for the agent to work in' +
+    (active && active.url ? ' (the active tab is ' + active.url.split('/')[0] + '//..., which blocks extensions)' : '') +
+    '. Open any http(s) page and try again.'
+  )
 }
 
 function isInjectable(url) {
@@ -305,10 +347,93 @@ chrome.debugger.onDetach.addListener((source) => {
   if (source && source.tabId != null) debuggerAttached.delete(source.tabId)
 })
 
+async function attachDebugger(tabId) {
+  if (debuggerAttached.has(tabId)) return
+  await chrome.debugger.attach({ tabId: tabId }, '1.3')
+  debuggerAttached.add(tabId)
+}
+
+function escapeRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function waitForDownload(id, timeoutMs) {
+  return new Promise((resolve) => {
+    let done = false
+    const finish = (item) => {
+      if (done) return
+      done = true
+      chrome.downloads.onChanged.removeListener(listener)
+      clearTimeout(timer)
+      resolve(item)
+    }
+    const check = async () => {
+      const [item] = await chrome.downloads.search({ id: id })
+      if (item && (item.state === 'complete' || item.state === 'interrupted')) finish(item)
+    }
+    const listener = (delta) => { if (delta.id === id) check() }
+    chrome.downloads.onChanged.addListener(listener)
+    const timer = setTimeout(() => finish({ state: 'timeout' }), timeoutMs || 120000)
+    check()
+  })
+}
+
+async function uploadFile(tabId, eid, filePath) {
+  const target = { tabId: tabId }
+  try {
+    await attachDebugger(tabId)
+    await chrome.debugger.sendCommand(target, 'DOM.enable')
+    await chrome.debugger.sendCommand(target, 'Runtime.enable')
+
+    // Resolve the element the agent chose into a CDP object handle.
+    const evaled = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+      expression: 'document.querySelector(\'[data-agent-eid="' + eid + '"]\')',
+      returnByValue: false,
+    })
+    const objectId = evaled && evaled.result && evaled.result.objectId
+    if (!objectId) {
+      return { ok: false, error: 'stale_element', detail: 'no element with eid ' + eid }
+    }
+    const node = await chrome.debugger.sendCommand(target, 'DOM.requestNode', { objectId: objectId })
+    if (!node || !node.nodeId) {
+      return { ok: false, error: 'could not resolve the element into a DOM node' }
+    }
+
+    await chrome.debugger.sendCommand(target, 'DOM.setFileInputFiles', {
+      nodeId: node.nodeId,
+      files: [filePath],
+    })
+
+    // Read back what the input now holds -- the honest confirmation.
+    const readback = await chrome.debugger.sendCommand(target, 'Runtime.callFunctionOn', {
+      objectId: objectId,
+      functionDeclaration:
+        'function(){ return this.files ? Array.from(this.files).map(f=>f.name+" ("+f.size+" bytes)").join(", ") : "not a file input" }',
+      returnByValue: true,
+    })
+    const attached = readback && readback.result ? readback.result.value : ''
+    return {
+      ok: !!attached && attached !== 'not a file input',
+      result: { attached_files: attached, path: filePath, via: 'CDP DOM.setFileInputFiles' },
+      error: attached && attached !== 'not a file input' ? undefined
+        : 'the element did not accept the file (is it an <input type="file">?)',
+    }
+  } catch (e) {
+    return { ok: false, error: 'upload failed: ' + String((e && e.message) || e) }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // BRIDGE REQUEST DISPATCH
 // ---------------------------------------------------------------------------
 const PAGE_VERBS = ['click', 'type', 'keypress', 'scroll', 'hover', 'focus', 'select', 'wait', 'extract', 'submit', 'dismiss_overlay']
+
+// Verbs whose whole point may be to leave the current page.
+const CAN_NAVIGATE = ['click', 'submit', 'keypress']
+
+// Ways Chrome reports "the document you were talking to is gone", all of which
+// a navigation can cause the instant after the action was genuinely performed.
+const NAVIGATION_RACE = /back\/forward cache|message channel is closed|message port closed|Receiving end does not exist|Extension context invalidated|The tab was closed|No tab with id/i
 
 async function handleBridgeRequest(payload) {
   const op = payload.op
@@ -365,7 +490,7 @@ async function handleBridgeRequest(payload) {
     case 'open_tab': {
       const tab = await chrome.tabs.create({ url: args.url || 'about:blank', active: true })
       agentOwnedTabs.add(tab.id)
-      currentTabId = tab.id
+      await rememberCurrentTab(tab.id)
       const status = await waitForTabComplete(tab.id, NAV_TIMEOUT_MS)
       const fresh = await chrome.tabs.get(tab.id)
       return { ok: true, result: { tab_id: tab.id, url: fresh.url, load: status, agent_owned: true } }
@@ -377,7 +502,7 @@ async function handleBridgeRequest(payload) {
       const tab = await chrome.tabs.get(tabId)
       await chrome.tabs.update(tabId, { active: true })
       await chrome.windows.update(tab.windowId, { focused: true })
-      currentTabId = tabId
+      await rememberCurrentTab(tabId)
       return { ok: true, result: { tab_id: tabId, url: tab.url } }
     }
 
@@ -416,6 +541,44 @@ async function handleBridgeRequest(payload) {
       return { ok: true, result: { reloaded: true, load: status } }
     }
 
+    case 'download': {
+      const url = args.url
+      if (!url) return { ok: false, error: 'download requires params.url' }
+      const id = await chrome.downloads.download({ url: url })
+      const done = await waitForDownload(id, 120000)
+      return done.state === 'complete'
+        ? { ok: true, result: { download_id: id, path: done.filename, bytes: done.fileSize, url: url } }
+        : { ok: false, error: 'download did not complete: ' + (done.error || done.state) }
+    }
+
+    case 'list_downloads': {
+      const query = { orderBy: ['-startTime'], limit: 20, state: 'complete' }
+      if (args.filename_contains) query.filenameRegex = escapeRegex(args.filename_contains)
+      const items = await chrome.downloads.search(query)
+      return {
+        ok: true,
+        result: {
+          downloads: items.map((d) => ({
+            id: d.id, path: d.filename, bytes: d.fileSize,
+            mime: d.mime, finished: d.endTime, source: (d.url || '').slice(0, 160),
+          })),
+        },
+      }
+    }
+
+    case 'upload_file': {
+      // A file input cannot be populated from page script -- the browser will
+      // not let untrusted code hand a site a file off the user's disk. The
+      // legitimate route is CDP's DOM.setFileInputFiles, which is exactly what
+      // a human picking the file in the dialog would produce.
+      const tabId = await resolveTabId(args.tab_id)
+      const eid = args.element_id
+      const filePath = args.file_path
+      if (!eid) return { ok: false, error: 'upload_file requires target.element_id (the file input)' }
+      if (!filePath) return { ok: false, error: 'upload_file requires params.file_path' }
+      return uploadFile(tabId, eid, filePath)
+    }
+
     case 'act': {
       const action = args.action || {}
       const verb = action.action
@@ -423,13 +586,51 @@ async function handleBridgeRequest(payload) {
         return { ok: false, error: 'not a page verb: ' + verb }
       }
       const tabId = await resolveTabId(action.target && action.target.tab_id)
-      const r = await callContent(tabId, { type: 'AGENT_EXECUTE', action: action })
+
+      let r
+      try {
+        r = await callContent(tabId, { type: 'AGENT_EXECUTE', action: action })
+      } catch (e) {
+        const msg = String((e && e.message) || e)
+        // A successful click is often indistinguishable from a failed one at
+        // this layer: the click starts a navigation, Chrome tears the old
+        // document down (or parks it in the back/forward cache), and the reply
+        // never arrives. Reporting that as a failure makes the agent retry an
+        // action it already performed -- which is how you get an agent
+        // bouncing between two pages forever.
+        //
+        // So for verbs that can navigate, say honestly that the action went out
+        // and the outcome is unknown. The verifier settles it from the next
+        // real observation, which is the only trustworthy source anyway.
+        if (NAVIGATION_RACE.test(msg) && CAN_NAVIGATE.indexOf(verb) !== -1) {
+          await Promise.race([
+            waitForTabComplete(tabId, 6000),
+            new Promise((res) => setTimeout(res, 1500)),
+          ])
+          let landedOn = ''
+          try { landedOn = (await chrome.tabs.get(tabId)).url } catch (e2) { /* gone */ }
+          return {
+            ok: true,
+            result: {
+              dispatched: true,
+              outcome: 'unknown-navigation-raced-the-reply',
+              detail: 'the page navigated before the content script could answer',
+              landed_on: landedOn,
+              channel_error: msg,
+            },
+          }
+        }
+        throw e
+      }
+
       if (!r) return { ok: false, error: 'no response from content script' }
       // A click may start a navigation; give it a moment to settle.
-      if (verb === 'click' || verb === 'submit' || verb === 'keypress') {
+      if (CAN_NAVIGATE.indexOf(verb) !== -1) {
+        // Resolve as soon as the load finishes; only fall back to a short
+        // fixed wait when the click started no navigation at all.
         await Promise.race([
           waitForTabComplete(tabId, 4000),
-          new Promise((res) => setTimeout(res, 1200)),
+          new Promise((res) => setTimeout(res, 450)),
         ])
       }
       return r

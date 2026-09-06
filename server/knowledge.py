@@ -59,6 +59,35 @@ HINT_PACKS: Dict[str, str] = {
         "- The search control is a textbox at the top; type the query and press Enter.\n"
         "- Product results are a repeated list of cards. Use the `extract` verb."
     ),
+    "lms.kiet.edu": (
+        "This is a Moodle learning-management site.\n"
+        "- The sign-in page has textboxes named 'Username' and 'Password' and a "
+        "'Log in' button. If a credential slot exists for this site, use "
+        "fill_credential for BOTH fields (never type a password yourself), then "
+        "click 'Log in'.\n"
+        "- After signing in you land on the Dashboard ('/my/'). Courses are links "
+        "in a 'Course overview' region.\n"
+        "- An assignment page shows a 'Submission status' table and a button named "
+        "'Add submission' or 'Edit submission'.\n"
+        "- The submission form has a file picker. Clicking 'Add...' opens a chooser "
+        "dialog; prefer the drop-zone's underlying <input type=\"file\"> and use "
+        "upload_file on it directly.\n"
+        "- Saving is done with a 'Save changes' button. Some assignments then need "
+        "'Submit assignment' and a confirmation checkbox -- both are irreversible, "
+        "so they will pause for human approval.\n"
+        "- Verify by checking the Submission status row reads 'Submitted for "
+        "grading'."
+    ),
+    "chatgpt.com": (
+        "This is a chat assistant.\n"
+        "- The composer is a contenteditable textbox near the bottom; use `type` "
+        "on it, then press Enter or click the send control.\n"
+        "- Replies stream in. After sending, use `wait` with text_contains for a "
+        "distinctive phrase, or wait for the stop-generating control to disappear, "
+        "before reading the answer out of page_text.\n"
+        "- Any file it produces appears as a download link in the reply; click it "
+        "and then use list_downloads to find the saved path."
+    ),
     "www.google.com": (
         "This is a web search engine.\n"
         "- The search control is a textbox named 'Search' or 'q'. Type the query then "
@@ -70,6 +99,8 @@ HINT_PACKS: Dict[str, str] = {
 
 # Aliases so a related hostname reuses the same pack.
 ALIASES: Dict[str, str] = {
+    "chat.openai.com": "chatgpt.com",
+    "www.chatgpt.com": "chatgpt.com",
     "flipkart.com": "www.flipkart.com",
     "meesho.com": "www.meesho.com",
     "amazon.in": "www.amazon.in",

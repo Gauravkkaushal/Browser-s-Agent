@@ -16,11 +16,13 @@ from typing import List, Optional
 from urllib.parse import urlparse
 
 from .schemas import ALLOWED_ACTIONS, ActionProposal, Observation, PolicyDecision
+from .vault import VaultError, vault
 
 # --- Verbs that are always safe to run unattended ---------------------------
 LOW_RISK_VERBS = {
     "navigate", "open_tab", "switch_tab", "back", "forward", "scroll", "hover",
     "focus", "wait", "extract", "screenshot", "keypress", "select",
+    "download", "list_downloads",
 }
 
 # --- Consequential wording on the control being clicked ---------------------
@@ -32,13 +34,20 @@ HIGH_RISK_NAME = re.compile(
 
 # --- Fields whose contents must never be typed by the agent unattended ------
 HIGH_RISK_FIELD = re.compile(
-    r"password|\botp\b|cvv|cvc|card number|cardnumber|aadhaar|upi pin|"
-    r"security code|passcode",
+    r"password|\botp\b|o\.t\.p|cvv|cvc|card number|cardnumber|aadhaar|upi pin|"
+    r"security code|passcode|one[- ]?time|verification code|auth(entication)? code|"
+    r"\b2fa\b|mfa",
     re.I,
 )
 
 # --- URLs where any action at all is consequential --------------------------
 HIGH_RISK_URL = re.compile(r"checkout|/pay|payment|billing|bank|upi|order/place|purchase", re.I)
+
+# --- Rules a standing pre-authorisation can never cover ---------------------
+# Completing a second factor is precisely the step that is meant to require a
+# person. Everything else in a task may be approved once, up front.
+ALWAYS_LIVE_RULES = {"protected-field", "password-field", "high-risk-field-name"}
+
 
 # --- Roles that make a click plainly navigational ---------------------------
 SAFE_CLICK_ROLES = {"link", "tab"}
@@ -64,6 +73,19 @@ def evaluate(action: ActionProposal, observation: Optional[Observation]) -> Poli
             reason="'%s' is not an allowed verb" % verb,
         )
 
+    # ---- Control verbs change the agent's own state, not the page ---------
+    if verb == "note":
+        return PolicyDecision(
+            decision="allow", risk="low", rules_fired=["control-verb:note"],
+            reason="records a fact the agent gathered; touches nothing",
+        )
+
+    if verb == "replan":
+        return PolicyDecision(
+            decision="allow", risk="low", rules_fired=["control-verb:replan"],
+            reason="rewrites the plan around what was just read; touches nothing",
+        )
+
     # ---- Terminal verbs report the outcome; they touch nothing -------------
     if verb in ("finish", "fail"):
         return PolicyDecision(
@@ -73,6 +95,37 @@ def evaluate(action: ActionProposal, observation: Optional[Observation]) -> Poli
 
     url = observation.url if observation else ""
     name = _element_name(action, observation)
+
+    # ---- Credentials: allowed only into the site they were registered for --
+    if verb == "fill_credential":
+        slot = action.params.slot or ""
+        if not slot:
+            return PolicyDecision(
+                decision="deny", risk="blocked", rules_fired=["credential-no-slot"],
+                reason="fill_credential needs params.slot naming a configured credential",
+            )
+        try:
+            vault.resolve(slot, observation.url if observation else "")
+        except VaultError as exc:
+            # Covers both "no such slot" and, importantly, "wrong site".
+            return PolicyDecision(
+                decision="deny", risk="blocked",
+                rules_fired=["credential-binding-refused"], reason=str(exc),
+            )
+        return PolicyDecision(
+            decision="allow", risk="low",
+            rules_fired=["credential-slot:" + slot, "site-binding-verified"],
+            reason="filling a credential the operator registered for this exact site; "
+                   "the value is never shown to the model",
+        )
+
+    # ---- Uploading a file is a disclosure; a human confirms it -------------
+    if verb == "upload_file":
+        return PolicyDecision(
+            decision="confirm", risk="high",
+            rules_fired=["file-upload"],
+            reason="uploading a file sends its contents to the site",
+        )
 
     # ---- HIGH: consequential URL ------------------------------------------
     if url and HIGH_RISK_URL.search(url) and verb in ("click", "type", "submit", "keypress"):
@@ -103,9 +156,19 @@ def evaluate(action: ActionProposal, observation: Optional[Observation]) -> Poli
             rules.append("enter-on-high-risk-url")
 
     if rules:
+        # Entering an authentication code or a password is the one class a
+        # standing pre-authorisation must never cover. Everything else about a
+        # task can be approved once up front; completing a second factor is the
+        # step that is supposed to require a person, and a machine that walks
+        # through it unattended has removed the only thing it was there for.
+        live = [r for r in rules if r in ALWAYS_LIVE_RULES]
         return PolicyDecision(
-            decision="confirm", risk="high", rules_fired=rules,
-            reason="needs a human decision: " + "; ".join(rules),
+            decision="confirm",
+            risk="high",
+            rules_fired=rules + (["requires-live-human"] if live else []),
+            reason="needs a human decision: " + "; ".join(rules)
+                   + ("; an authentication code cannot be pre-approved"
+                      if live else ""),
         )
 
     # ---- LOW: closing a tab, but only one the agent opened ----------------
@@ -169,6 +232,13 @@ def evaluate(action: ActionProposal, observation: Optional[Observation]) -> Poli
 def redact_preview(action: ActionProposal) -> str:
     """Human-readable one-liner for the confirmation modal."""
     verb = action.action
+    if verb == "fill_credential":
+        return "fill the saved credential %s (value never shown or logged)" % (
+            action.params.slot or "?")
+    if verb == "upload_file":
+        return "upload the file %s" % (action.params.file_path or "?")
+    if verb == "download":
+        return "download " + (action.params.url or "the current link")
     if verb == "type":
         text = action.params.text or ""
         return 'type "%s"' % (text[:120] + ("..." if len(text) > 120 else ""))

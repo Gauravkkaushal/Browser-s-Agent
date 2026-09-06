@@ -14,9 +14,24 @@ import asyncio
 import uuid
 from typing import Any, Dict, Optional
 
+import re as _re
+from functools import lru_cache
+from pathlib import Path
+
 from .config import BRIDGE_TIMEOUT_S
 from .events import bus
 from .schemas import Observation, now_iso
+
+
+@lru_cache(maxsize=1)
+def _expected_build() -> str:
+    """The build id in the content script on disk."""
+    path = Path(__file__).parent.parent / "public" / "agent-content.js"
+    try:
+        m = _re.search(r"const AGENT_BUILD = '([^']+)'", path.read_text(encoding="utf-8"))
+        return m.group(1) if m else ""
+    except OSError:
+        return ""
 
 
 class BridgeError(RuntimeError):
@@ -30,6 +45,7 @@ class BrowserBridge:
         self._pending: Dict[str, asyncio.Future] = {}
         self._connected_at: Optional[str] = None
         self._connect_count = 0
+        self._stale_warned = False
 
     # -- connection ---------------------------------------------------------
     @property
@@ -50,6 +66,7 @@ class BrowserBridge:
         }
 
     async def attach(self, socket, session_id: str) -> None:
+        self._stale_warned = False
         self._socket = socket
         self._session_id = session_id
         self._connected_at = now_iso()
@@ -117,7 +134,34 @@ class BrowserBridge:
     async def observe(self, task_id: Optional[str] = None, screenshot: bool = False,
                       tab_id: Optional[int] = None) -> Observation:
         raw = await self.request("observe", {"screenshot": screenshot, "tab_id": tab_id}, task_id=task_id)
-        return Observation.model_validate(raw)
+        obs = Observation.model_validate(raw)
+        await self._warn_if_stale(obs, task_id)
+        return obs
+
+    async def _warn_if_stale(self, obs: Observation, task_id: Optional[str]) -> None:
+        """Say plainly when Chrome is running an older content script.
+
+        Every browser-side fix ships inside the extension, so an un-reloaded
+        extension silently reproduces bugs that are already fixed on disk. That
+        is indistinguishable from a broken agent unless somebody says it out
+        loud, so: say it out loud, once per session.
+        """
+        expected = _expected_build()
+        if not expected or not obs.agent_build or obs.agent_build == expected:
+            return
+        if self._stale_warned:
+            return
+        self._stale_warned = True
+        await bus.emit("ERROR", {
+            "error": "The Chrome extension is running an OLD content script "
+                     "(build %r) but the code on disk is build %r. Browser-side "
+                     "fixes are NOT active. Rebuild with `npm run build`, then "
+                     "open chrome://extensions and press reload on Browser Agent."
+                     % (obs.agent_build, expected),
+            "stale_extension": True,
+            "extension_build": obs.agent_build,
+            "expected_build": expected,
+        }, task_id=task_id)
 
     async def screenshot(self, task_id: Optional[str] = None,
                          tab_id: Optional[int] = None) -> Optional[str]:

@@ -47,7 +47,7 @@ def check_freshness(before: Observation, after: Observation,
 
 
 def _text_of(obs: Observation) -> str:
-    parts = [obs.title]
+    parts = [obs.title, obs.page_text]
     for el in obs.interactive_elements:
         if el.name:
             parts.append(el.name)
@@ -60,42 +60,108 @@ def _text_of(obs: Observation) -> str:
 
 def verify(action: ActionProposal, before: Observation, after: Observation,
            exec_result: Dict[str, Any]) -> Verdict:
+    # `signals` is evidence that something really changed. `notes` explains the
+    # reasoning and must never, by itself, make a verdict look positive.
     signals: List[str] = []
+    notes: List[str] = []
     expected = action.params.expected
 
+    # ---- 0. The field's own readback outranks any prediction ---------------
+    #
+    # For typing there is a direct, physical answer: read the field back and see
+    # whether the text is in it. That beats anything the model predicted -- a
+    # prediction like "the page will contain this text" can be satisfied by the
+    # text appearing somewhere else entirely, and then the agent goes on to
+    # press Send on an empty box.
+    result = exec_result or {}
+    if action.action == "type" and "verified" in result:
+        if result.get("verified"):
+            return Verdict(
+                verdict="success",
+                signals=["field readback contains the typed text (%s)" % result.get("strategy")],
+                reason="the field itself confirms the text landed",
+            )
+        return Verdict(
+            verdict="failed",
+            signals=["field readback does NOT contain the typed text (%s)" % result.get("strategy"),
+                     "readback was: %s" % str(result.get("readback", ""))[:120]],
+            reason="the text did not land in the field. Do not act on it as though "
+                   "it had -- focus the field and type again, or find the right field",
+        )
+
     # ---- 1. The model's own prediction ------------------------------------
+    #
+    # A prediction only counts as evidence if it was NOT already true before the
+    # action. "The chat list will contain the group name" is satisfied by a
+    # sidebar that showed the name all along, so it would mark every click a
+    # success no matter what happened -- which is how an agent ends up clicking
+    # the same row twenty times and calling each one verified.
     if expected is not None:
         checks: List[bool] = []
+        before_text = _text_of(before)
         after_text = _text_of(after)
+        vacuous: List[str] = []
 
         if expected.url_contains:
             hit = expected.url_contains.lower() in after.url.lower()
-            checks.append(hit)
-            signals.append("url_contains(%s)=%s" % (expected.url_contains[:40], hit))
+            if expected.url_contains.lower() in before.url.lower():
+                vacuous.append("url_contains(%s) was already true" % expected.url_contains[:30])
+            else:
+                checks.append(hit)
+            notes.append("url_contains(%s)=%s" % (expected.url_contains[:40], hit))
 
         if expected.text_contains:
-            hit = expected.text_contains.lower() in after_text
-            checks.append(hit)
-            signals.append("text_contains(%s)=%s" % (expected.text_contains[:40], hit))
+            needle = expected.text_contains.lower()
+            hit = needle in after_text
+            if needle in before_text:
+                vacuous.append("text_contains(%s) was already true before the action"
+                               % expected.text_contains[:30])
+            else:
+                checks.append(hit)
+            notes.append("text_contains(%s)=%s" % (expected.text_contains[:40], hit))
 
         if expected.element_appears:
             needle = expected.element_appears.lower()
-            hit = any(needle in (el.name or "").lower() or needle in (el.text or "").lower()
-                      for el in after.interactive_elements)
-            checks.append(hit)
-            signals.append("element_appears(%s)=%s" % (expected.element_appears[:40], hit))
+
+            def _present(o: Observation) -> bool:
+                return any(needle in (el.name or "").lower()
+                           or needle in (el.text or "").lower()
+                           or needle == el.eid.lower()
+                           for el in o.interactive_elements)
+
+            hit = _present(after)
+            if _present(before):
+                vacuous.append("element_appears(%s) was already present"
+                               % expected.element_appears[:30])
+            else:
+                checks.append(hit)
+            notes.append("element_appears(%s)=%s" % (expected.element_appears[:40], hit))
 
         if expected.element_gone:
             needle = expected.element_gone.lower()
             still = any(needle in (el.name or "").lower() or needle in (el.text or "").lower()
                         for el in after.interactive_elements)
             checks.append(not still)
-            signals.append("element_gone(%s)=%s" % (expected.element_gone[:40], not still))
+            notes.append("element_gone(%s)=%s" % (expected.element_gone[:40], not still))
+
+        if vacuous and not checks:
+            # Every prediction was already satisfied before we acted, so none of
+            # them says anything about whether the action worked. Fall through to
+            # the generic signals rather than award a free pass.
+            notes.append("prediction proved nothing: " + "; ".join(vacuous[:2]))
+            expected = None
 
         if checks:
+            signals.extend(notes)
             if all(checks):
                 return Verdict(verdict="success", signals=signals,
                                reason="every predicted change is present in the new observation")
+            if after.page_state.loading:
+                # The page has not finished arriving; there is nothing to judge yet.
+                signals.append("page still loading")
+                return Verdict(verdict="uncertain", signals=signals + notes,
+                               reason="the page is still loading, so the predicted "
+                                      "change may simply not have rendered yet")
             if not any(checks):
                 return Verdict(verdict="failed", signals=signals,
                                reason="none of the predicted changes happened")
@@ -139,18 +205,19 @@ def verify(action: ActionProposal, before: Observation, after: Observation,
                        reason="nothing structured could be read from this page")
 
     if action.action in ("wait", "screenshot", "scroll", "hover", "focus"):
-        return Verdict(verdict="success", signals=signals or ["no state change required"],
+        return Verdict(verdict="success", signals=(signals + notes) or ["no state change required"],
                        reason="%s does not require a page change" % action.action)
 
     if action.action in NAVIGATIONAL:
         if before.url != after.url or action.action in ("open_tab", "switch_tab", "close_tab"):
-            return Verdict(verdict="success", signals=signals, reason="navigation took effect")
-        return Verdict(verdict="failed", signals=signals or ["url unchanged"],
+            return Verdict(verdict="success", signals=signals + notes, reason="navigation took effect")
+        return Verdict(verdict="failed", signals=(signals + notes) or ["url unchanged"],
                        reason="the URL did not change after a navigation")
 
     if signals:
-        return Verdict(verdict="success", signals=signals,
+        return Verdict(verdict="success", signals=signals + notes,
                        reason="the page changed in a way consistent with the action")
 
-    return Verdict(verdict="uncertain", signals=["no observable change"],
-                   reason="nothing measurable changed; re-observing once")
+    return Verdict(verdict="uncertain", signals=["no observable change"] + notes,
+                   reason="nothing measurable changed; the action had no visible "
+                          "effect, so trying it again will not help")

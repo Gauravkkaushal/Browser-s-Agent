@@ -12,10 +12,17 @@
  * roles and generic signals -- never on a hostname.
  */
 
+// Bumped whenever the perception or execution behaviour changes. The server
+// compares this against the file on disk and says so loudly when Chrome is
+// still running an older copy -- a stale content script looks exactly like a
+// broken agent, and that is a miserable thing to debug.
+const AGENT_BUILD = 'b8-typing-strategies'
+
 const AGENT_EID = 'agentEid'
 const AGENT_NID = 'agentNid'
-const MAX_ELEMENTS = 220
+const MAX_ELEMENTS = 300
 const TEXT_CAP = 160
+const PAGE_TEXT_CAP = 9000
 
 // ---------------------------------------------------------------------------
 // PII patterns (harvested from the legacy on-device scanner).
@@ -31,7 +38,9 @@ const PII_PATTERNS = [
   { type: 'DL', regex: /\b[A-Z]{2}[0-9]{2}[ -]?(?:19|20)[0-9]{2}[0-9]{7}\b/g },
   { type: 'UPI', regex: /\b[\w.-]+@(?:upi|oksbi|okhdfcbank|okaxis|paytm|ibl|ybl|apl)\b/gi },
   { type: 'EMAIL', regex: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g },
-  { type: 'PHONE', regex: /\b(?:\+91[\s-]?)?[6-9]\d{9}\b/g },
+  // No leading \b: it would never match before "+", leaving the country code
+  // stranded next to the redaction marker.
+  { type: 'PHONE', regex: /(?:\+91[\s-]?)?[6-9]\d{9}\b/g },
 ]
 
 const PRICE_REGEX = /(?:₹|Rs\.?|INR|\$|€|£)\s?[\d,]+(?:\.\d{1,2})?/i
@@ -213,12 +222,19 @@ function appNameFromHost() {
   // Generic: take the most significant label of the hostname, dropping public
   // suffixes and common subdomain prefixes. A chat host resolves to its brand
   // label and a mail host to its provider label, with no domain literal here.
-  const parts = location.hostname.split('.').filter((p) => p && p !== 'www')
+  const host = location.hostname
+  // A bare IP or a loopback name has no brand label to extract.
+  if (!host || host === 'localhost' || /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.indexOf(':') !== -1) {
+    return 'generic'
+  }
+  const parts = host.split('.').filter((p) => p && p !== 'www')
   if (parts.length === 0) return 'generic'
   const generic = ['com', 'net', 'org', 'co', 'in', 'io', 'app', 'web', 'mail', 'accounts']
   const meaningful = parts.filter((p) => generic.indexOf(p) === -1)
   return (meaningful[meaningful.length - 1] || parts[0]).toLowerCase()
 }
+
+const SIGNIN_WORDING = /\b(sign in|signin|log in|login|continue with|use another account|forgot password|create account)\b/i
 
 function detectLoginWall() {
   const bodyText = (document.body ? document.body.innerText || '' : '').slice(0, 6000)
@@ -235,12 +251,23 @@ function detectLoginWall() {
     return { app: appNameFromHost(), kind: 'qr', hint: 'Scan the QR code with your phone to sign in.' }
   }
 
-  // Signal 2: a visible password field, or a sign-in URL shape with an
-  // identifier field => credential wall.
-  const pwd = Array.from(document.querySelectorAll('input[type="password"]')).find((el) => isVisible(el))
+  // Signal 2: a credential wall. A password field ALONE is not enough -- plenty
+  // of ordinary pages (account settings, a saved customer record) contain one
+  // without being a sign-in gate, and treating those as a wall would stall the
+  // loop waiting for a human who has nothing to do. Require corroboration: the
+  // URL looks like a sign-in flow, or the page is dominated by sign-in wording
+  // with an identifier field beside the password.
   const signinUrl = /(^|\/)(signin|sign-in|sign_in|login|log-in|auth|oauth|challenge)(\/|\?|$)/i.test(location.pathname + location.search)
   const identifier = document.querySelector('input[type="email"], input[name*="identifier" i], input[name*="email" i], input[autocomplete="username"]')
-  if (pwd || (signinUrl && identifier)) {
+  const pwd = Array.from(document.querySelectorAll('input[type="password"]')).find((el) => isVisible(el))
+  const signinSubmit = Array.from(document.querySelectorAll('button, input[type="submit"], [role="button"]'))
+    .filter((el) => isVisible(el))
+    .some((el) => SIGNIN_WORDING.test(accessibleName(el)))
+
+  if (signinUrl && (identifier || pwd)) {
+    return { app: appNameFromHost(), kind: 'credential', hint: 'Sign in with your account to continue.' }
+  }
+  if (pwd && identifier && signinSubmit) {
     return { app: appNameFromHost(), kind: 'credential', hint: 'Sign in with your account to continue.' }
   }
   return null
@@ -312,15 +339,18 @@ function walk() {
     errors.push('selector: ' + e.message)
   }
 
+  // Rank before capping.
+  //
+  // Walking in DOM order and stopping at a limit is how an agent goes blind on
+  // a real application: a chat sidebar with hundreds of rows will consume the
+  // entire budget before the walker ever reaches the message box at the bottom
+  // of the document. What is on screen matters far more than what comes first
+  // in the markup, so score everything cheaply, then keep the best.
+  const scored = []
   const seen = new Set()
-  const elements = []
-  let n = 0
-
   for (const el of raw) {
-    if (elements.length >= MAX_ELEMENTS) break
     if (seen.has(el)) continue
     seen.add(el)
-
     let rect
     let style
     try {
@@ -330,6 +360,31 @@ function walk() {
       continue
     }
     if (!isVisible(el, rect, style)) continue
+    const onScreen = rect.bottom > 0 && rect.right > 0
+      && rect.top < window.innerHeight && rect.left < window.innerWidth
+    const tag = el.tagName.toLowerCase()
+    const editable = isEditable(el)
+    let score = 0
+    if (onScreen) score += 1000
+    // A place to type is the scarcest and most valuable thing on a page.
+    if (editable) score += 400
+    if (['button', 'a', 'input', 'textarea', 'select'].indexOf(tag) !== -1) score += 60
+    const role = el.getAttribute('role') || ''
+    if (role === 'button' || role === 'textbox' || role === 'searchbox') score += 60
+    // Long lists of identical rows are worth sampling, not exhausting.
+    if (role === 'listitem' || role === 'row' || role === 'gridcell') score -= 20
+    scored.push({ el: el, rect: rect, style: style, score: score })
+  }
+  scored.sort((a, b) => b.score - a.score || a.rect.top - b.rect.top)
+
+  const elements = []
+  let n = 0
+
+  for (const entry of scored) {
+    if (elements.length >= MAX_ELEMENTS) break
+    const el = entry.el
+    const rect = entry.rect
+    const style = entry.style
 
     const role = roleOf(el)
     const tag = el.tagName.toLowerCase()
@@ -387,7 +442,7 @@ function walk() {
 
   // Also record PII found in plain page text so screenshots mask it.
   try {
-    const blocks = Array.from(document.querySelectorAll('p, span, td, th, li, label, h1, h2, h3, div'))
+    const blocks = Array.from(document.querySelectorAll('p, span, td, th, li, label, h1, h2, h3, h4, dd, dt, div'))
       .filter((b) => b.children.length <= 2)
       .slice(0, 400)
     for (const b of blocks) {
@@ -414,6 +469,20 @@ function walk() {
       }
     : null
 
+  // The readable text of the page, redacted.
+  //
+  // Interactive elements alone are not an observation -- they are a list of
+  // things to press. Prices, article copy, confirmation banners and every other
+  // answer the user actually asked for live in ordinary text nodes. Without
+  // this the agent can operate a page but cannot read one.
+  let pageText = ''
+  try {
+    const main = document.querySelector('main, [role="main"], article') || document.body
+    pageText = redact((main.innerText || '').replace(/\n{3,}/g, '\n\n').trim()).slice(0, PAGE_TEXT_CAP)
+  } catch (e) {
+    errors.push('page-text: ' + e.message)
+  }
+
   const forms = Array.from(document.querySelectorAll('form')).slice(0, 12).map((f, i) => ({
     index: i,
     name: redact(f.getAttribute('name') || f.getAttribute('id') || '').slice(0, 60),
@@ -435,6 +504,7 @@ function walk() {
       login_wall: detectLoginWall(),
     },
     interactive_elements: elements,
+    page_text: pageText,
     dom_summary: {
       element_count: document.querySelectorAll('*').length,
       interactive_count: elements.length,
@@ -445,6 +515,7 @@ function walk() {
     sensitive_boxes: sensitiveBoxes.slice(0, 200),
     errors: errors,
     pii_redactions: Object.assign({}, redactionCounts),
+    agent_build: AGENT_BUILD,
     walk_ms: Math.round(performance.now() - started),
     observed_at: new Date().toISOString(),
   }
@@ -498,7 +569,7 @@ async function scrollIntoView(el) {
   } catch (e) {
     el.scrollIntoView(true)
   }
-  await sleep(120)
+  await sleep(70)
 }
 
 function centerOf(el) {
@@ -541,22 +612,59 @@ function firePointer(el, type, pt) {
 async function doClick(el) {
   await scrollIntoView(el)
   const pt = centerOf(el)
-  // Report occlusion honestly rather than clicking a covering overlay.
+
+  // Click what is actually under the pointer, the way a real mouse does.
+  //
+  // Application UIs routinely put the handler on an inner node: a chat list row
+  // is a container, but the thing that opens the conversation is a descendant.
+  // Dispatching on the container alone means the event never reaches the
+  // listener and the click silently does nothing -- the page looks unchanged
+  // and the agent concludes it must try again.
+  let target = el
   let occludedBy = null
   try {
     const top = document.elementFromPoint(pt.x, pt.y)
-    if (top && top !== el && !el.contains(top) && !top.contains(el)) {
-      occludedBy = redact(accessibleName(top)).slice(0, 60) || top.tagName.toLowerCase()
+    if (top) {
+      if (el.contains(top)) {
+        target = top          // an inner node: exactly what a mouse would hit
+      } else if (top !== el && !top.contains(el)) {
+        // Something unrelated is covering the element. Say so, and click it
+        // anyway is NOT the answer -- report it and let the loop decide.
+        occludedBy = redact(accessibleName(top)).slice(0, 60) || top.tagName.toLowerCase()
+      }
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) { /* elementFromPoint can throw on detached nodes */ }
 
-  try { el.focus({ preventScroll: true }) } catch (e) { /* ignore */ }
-  firePointer(el, 'pointerdown', pt)
-  fireMouse(el, 'mousedown', pt)
-  firePointer(el, 'pointerup', pt)
-  fireMouse(el, 'mouseup', pt)
-  fireMouse(el, 'click', pt)
-  return { clicked: true, occluded_by: occludedBy, point: pt }
+  try { (target.focus ? target : el).focus({ preventScroll: true }) } catch (e) { /* ignore */ }
+
+  const before = document.querySelectorAll('*').length
+  firePointer(target, 'pointerdown', pt)
+  fireMouse(target, 'mousedown', pt)
+  firePointer(target, 'pointerup', pt)
+  fireMouse(target, 'mouseup', pt)
+  fireMouse(target, 'click', pt)
+
+  // Some frameworks only act on a native activation. If the synthetic sequence
+  // moved nothing at all, fall back to the element's own click().
+  await sleep(120)
+  let usedNativeFallback = false
+  if (document.querySelectorAll('*').length === before) {
+    const clickable = (target.closest && target.closest('a[href],button,[role="button"],[role="listitem"],[role="row"],[onclick]')) || el
+    try {
+      clickable.click()
+      usedNativeFallback = true
+    } catch (e) { /* ignore */ }
+  }
+
+  return {
+    clicked: true,
+    occluded_by: occludedBy,
+    point: pt,
+    dispatched_on: target === el
+      ? 'the element itself'
+      : (target.tagName || '?').toLowerCase() + ' inside it',
+    native_fallback: usedNativeFallback,
+  }
 }
 
 function nativeSetValue(el, text) {
@@ -585,7 +693,7 @@ function normalizeForCompare(s) {
 async function doType(el, text, replace) {
   await scrollIntoView(el)
   try { el.focus({ preventScroll: true }) } catch (e) { /* ignore */ }
-  await sleep(60)
+  await sleep(35)
 
   const tag = el.tagName.toLowerCase()
   const isNativeField = tag === 'input' || tag === 'textarea'
@@ -598,6 +706,7 @@ async function doType(el, text, replace) {
     nativeSetValue(el, replace === false ? (el.value || '') + text : text)
     el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: text, inputType: 'insertText' }))
     el.dispatchEvent(new Event('change', { bubbles: true }))
+    await sleep(60)
     const got = normalizeForCompare(el.value)
     return {
       typed: true,
@@ -608,46 +717,92 @@ async function doType(el, text, replace) {
   }
 
   if (el.isContentEditable) {
-    const sel = window.getSelection()
-    try {
-      if (replace !== false) {
+    // Rich editors (Lexical, Draft, ProseMirror) keep their own document model
+    // and only update the DOM in response to events they recognise. There is no
+    // single technique that works everywhere, so try the realistic ones in
+    // order and read the field back after each -- with a beat in between,
+    // because these editors render asynchronously and an immediate readback
+    // reports failure on a change that is about to land.
+    const wanted = normalizeForCompare(text)
+    const readback = () => normalizeForCompare(el.innerText || el.textContent || '')
+    const landed = () => readback().indexOf(wanted) !== -1
+
+    const placeCaret = () => {
+      try {
+        const sel = window.getSelection()
         const range = document.createRange()
         range.selectNodeContents(el)
+        if (replace === false) range.collapse(false)
         sel.removeAllRanges()
         sel.addRange(range)
-        document.execCommand('delete', false)
-      }
-      const range2 = document.createRange()
-      range2.selectNodeContents(el)
-      range2.collapse(false)
-      sel.removeAllRanges()
-      sel.addRange(range2)
-    } catch (e) { /* selection may be unavailable */ }
+        if (replace !== false) document.execCommand('delete', false)
+      } catch (e) { /* selection may be unavailable */ }
+    }
 
-    let ok = false
-    try {
-      ok = document.execCommand('insertText', false, text)
-    } catch (e) {
-      ok = false
+    const attempts = [
+      // 1. The standard editing command. Produces real beforeinput/input
+      //    events, which is what most editors listen for.
+      ['execCommand:insertText', () => {
+        placeCaret()
+        try { document.execCommand('insertText', false, text) } catch (e) { /* ignore */ }
+      }],
+      // 2. A paste. Editors that ignore synthetic key input almost always
+      //    honour a paste, because that is how a real user drops in text.
+      ['clipboard:paste', () => {
+        placeCaret()
+        try {
+          const dt = new DataTransfer()
+          dt.setData('text/plain', text)
+          el.dispatchEvent(new ClipboardEvent('paste', {
+            clipboardData: dt, bubbles: true, cancelable: true, composed: true,
+          }))
+        } catch (e) { /* DataTransfer unavailable */ }
+      }],
+      // 3. Raw input events, for editors that build from beforeinput alone.
+      ['InputEvent:insertText', () => {
+        placeCaret()
+        el.dispatchEvent(new InputEvent('beforeinput', {
+          bubbles: true, cancelable: true, composed: true, inputType: 'insertText', data: text,
+        }))
+        el.dispatchEvent(new InputEvent('input', {
+          bubbles: true, composed: true, inputType: 'insertText', data: text,
+        }))
+      }],
+      // 4. Last resort: write the text in and tell the editor it changed.
+      ['textContent+input', () => {
+        try {
+          el.textContent = replace === false ? (el.textContent || '') + text : text
+          el.dispatchEvent(new InputEvent('input', {
+            bubbles: true, composed: true, inputType: 'insertText', data: text,
+          }))
+        } catch (e) { /* ignore */ }
+      }],
+    ]
+
+    const tried = []
+    for (const attempt of attempts) {
+      const name = attempt[0]
+      tried.push(name)
+      attempt[1]()
+      await sleep(90)
+      if (landed()) {
+        return {
+          typed: true,
+          strategy: name,
+          strategies_tried: tried,
+          verified: true,
+          readback: redact(readback()).slice(0, 200),
+        }
+      }
     }
-    let strategy = 'execCommand:insertText'
-    let got = normalizeForCompare(el.textContent)
-    if (!ok || got.indexOf(normalizeForCompare(text)) === -1) {
-      // Fallback path for editors that block execCommand.
-      strategy = 'InputEvent:insertText'
-      el.dispatchEvent(new InputEvent('beforeinput', {
-        bubbles: true, cancelable: true, composed: true, inputType: 'insertText', data: text,
-      }))
-      el.dispatchEvent(new InputEvent('input', {
-        bubbles: true, composed: true, inputType: 'insertText', data: text,
-      }))
-      got = normalizeForCompare(el.textContent)
-    }
+
     return {
-      typed: true,
-      strategy: strategy,
-      verified: got.indexOf(normalizeForCompare(text)) !== -1,
-      readback: redact(got).slice(0, 200),
+      typed: false,
+      strategy: 'none of ' + tried.length + ' strategies worked',
+      strategies_tried: tried,
+      verified: false,
+      readback: redact(readback()).slice(0, 200),
+      error: 'this editor did not accept any of the standard text-entry methods',
     }
   }
 
@@ -758,7 +913,10 @@ function doExtract(params) {
   const seenNames = new Set()
   for (const el of best.list) {
     if (items.length >= maxResults) break
-    const text = (el.innerText || '').replace(/\s+/g, ' ').trim()
+    // Keep the raw innerText as well: its line breaks are how a card separates
+    // its title from its price, and the name picker below relies on them.
+    const rawText = (el.innerText || '').trim()
+    const text = rawText.replace(/\s+/g, ' ').trim()
     const priceMatch = text.match(PRICE_REGEX)
     if (!priceMatch) continue
     const priceInt = parseInt(String(priceMatch[0]).replace(/[^\d]/g, ''), 10)
@@ -770,14 +928,18 @@ function doExtract(params) {
     const anchor = el.tagName.toLowerCase() === 'a' && el.href ? el : el.querySelector('a[href]')
     const url = anchor && liveHrefs.has(anchor.href) ? anchor.href : ''
 
-    // Name: the longest non-price line in the card.
-    const lines = text.split(/\n|\s{2,}/).map((s) => s.trim()).filter(Boolean)
+    // Name: the longest line in the card that is not itself a price or a bare
+    // rating. Cards put the title on its own line, which is why the raw
+    // innerText is kept above -- normalising whitespace first would destroy
+    // exactly the line breaks this depends on.
+    const lines = rawText.split(/\n+/).map((s) => s.trim()).filter(Boolean)
     let name = ''
     for (const ln of lines) {
       if (PRICE_REGEX.test(ln)) continue
+      if (/^[0-5](\.\d)?\s*(out of 5|stars?|★)?$/i.test(ln)) continue
       if (ln.length > name.length && ln.length < 140) name = ln
     }
-    if (!name) name = text.slice(0, 90)
+    if (!name) name = text.replace(PRICE_REGEX, '').trim().slice(0, 90)
     const nameKey = name.toLowerCase().slice(0, 50)
     if (seenNames.has(nameKey)) continue
     seenNames.add(nameKey)
@@ -804,7 +966,7 @@ function doExtract(params) {
 }
 
 async function doWait(params) {
-  const timeout = Math.min(Number(params.timeout_ms) || 3000, 30000)
+  const timeout = Math.min(Number(params.timeout_ms) || 5000, 60000)
   const started = Date.now()
   const needle = params.text_contains ? String(params.text_contains).toLowerCase() : null
   while (Date.now() - started < timeout) {
@@ -871,7 +1033,7 @@ async function execute(action) {
     case 'click': {
       const before = { url: location.href, count: document.querySelectorAll('*').length }
       const r = await doClick(el)
-      await sleep(350)
+      await sleep(150)
       return { ok: true, result: Object.assign({ resolution: how, before: before }, r) }
     }
     case 'type': {
@@ -880,7 +1042,7 @@ async function execute(action) {
     }
     case 'keypress': {
       const r = await doKeypress(el, params.key_combo)
-      await sleep(300)
+      await sleep(150)
       return { ok: !!r.pressed, result: r, error: r.error }
     }
     case 'scroll': {

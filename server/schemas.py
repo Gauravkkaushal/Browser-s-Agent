@@ -91,6 +91,7 @@ class Observation(BaseModel):
     scroll: Dict[str, Any] = Field(default_factory=dict)
     page_state: PageState = Field(default_factory=PageState)
     interactive_elements: List[InteractiveElement] = Field(default_factory=list)
+    page_text: str = ""
     dom_summary: Dict[str, Any] = Field(default_factory=dict)
     focused_element: Optional[Dict[str, Any]] = None
     screenshot: Optional[str] = None
@@ -99,6 +100,7 @@ class Observation(BaseModel):
     errors: List[str] = Field(default_factory=list)
     pii_redactions: Dict[str, int] = Field(default_factory=dict)
     walk_ms: int = 0
+    agent_build: str = ""
     observed_at: str = Field(default_factory=now_iso)
 
     def element(self, eid: str) -> Optional[InteractiveElement]:
@@ -114,14 +116,23 @@ class Observation(BaseModel):
 ALLOWED_ACTIONS = [
     "navigate", "open_tab", "switch_tab", "close_tab", "back", "forward",
     "click", "type", "keypress", "scroll", "hover", "focus", "select",
-    "wait", "extract", "screenshot", "submit", "finish", "fail",
+    "wait", "extract", "screenshot", "submit",
+    # Credentials and files. The model names a credential SLOT, never a value.
+    "fill_credential", "download", "upload_file", "list_downloads",
+    # Rewrite the plan once the real objective becomes known, and keep
+    # hold of facts gathered along the way.
+    "replan", "note",
+    "finish", "fail",
 ]
 
 # Verbs the service worker owns; everything else goes to the content script.
 BROWSER_VERBS = {
     "navigate", "open_tab", "switch_tab", "close_tab", "back", "forward", "screenshot",
+    "download", "upload_file", "list_downloads",
 }
 TERMINAL_VERBS = {"finish", "fail"}
+# Verbs handled entirely by the loop; they never reach the browser.
+CONTROL_VERBS = {"replan", "note"}
 
 
 class ExpectedState(BaseModel):
@@ -154,7 +165,16 @@ class ActionParams(BaseModel):
     replace: Optional[bool] = None
     summary: Optional[str] = None
     error: Optional[str] = None
+    # replan: what the agent has just learned, and what it now intends to do.
+    discovered: Optional[str] = None
+    objective: Optional[str] = None
     accept: Optional[bool] = None
+    # A credential SLOT NAME such as "lms.password". Never a credential value:
+    # the server substitutes the real secret on its way to the browser.
+    slot: Optional[str] = None
+    # Local file path for upload_file, and the filename filter for download.
+    file_path: Optional[str] = None
+    filename_contains: Optional[str] = None
     expected: Optional[ExpectedState] = None
 
 
