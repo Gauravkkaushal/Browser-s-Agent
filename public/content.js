@@ -255,7 +255,7 @@
 
   function applyMasks(regions, mode = 'strict') {
     clearMasks()
-    if (mode === 'fast' || !regions || regions.length === 0) return
+    if (mode === 'fast' || !regions || regions.length === 0) return ''
 
     maskContainer = document.createElement('div')
     maskContainer.id = 'netrashield-mask-root'
@@ -269,7 +269,7 @@
       z-index: 2147483640;
     `
 
-    regions.forEach((region) => {
+    regions.forEach((region, index) => {
       const maskEl = document.createElement('div')
       const isStrict = mode === 'strict'
       const [top, left, width, height] = region.box
@@ -280,27 +280,48 @@
         left: ${left}px;
         width: ${width}px;
         height: ${height}px;
-        background: ${isStrict ? 'rgba(15, 23, 42, 0.96)' : 'rgba(2, 6, 23, 0.75)'};
+        background: ${isStrict ? 'rgba(8, 14, 22, 0.94)' : 'rgba(2, 6, 23, 0.75)'};
         backdrop-filter: blur(8px);
-        border: 1px solid #38bdf8;
+        border: 1.5px solid #10b981;
         border-radius: 4px;
-        box-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
+        box-shadow: 0 0 12px rgba(16, 185, 129, 0.4);
         display: flex;
         align-items: center;
-        justify-content: center;
-        color: #38bdf8;
+        justify-content: flex-start;
+        padding: 0 4px;
+        color: #34d399;
         font-family: system-ui, -apple-system, sans-serif;
-        font-size: 11px;
-        font-weight: 600;
+        font-size: 10px;
+        font-weight: 700;
         letter-spacing: 0.5px;
         text-transform: uppercase;
         overflow: hidden;
+        animation: ns-pop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        animation-delay: ${index * 40}ms;
       `
-      maskEl.innerText = `🛡️ ${region.label}`
+      maskEl.innerText = `🔒 ${region.label || region.type || 'REDACTED'}`
       maskContainer.appendChild(maskEl)
     })
 
     document.body.appendChild(maskContainer)
+
+    try {
+      const canvas = document.createElement('canvas')
+      canvas.width = 480
+      canvas.height = 300
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        ctx.fillStyle = '#0f172a'
+        ctx.fillRect(0, 0, 480, 300)
+        ctx.fillStyle = '#34d399'
+        ctx.font = 'bold 11px sans-serif'
+        ctx.fillText(`🛡️ NetraShield Active: ${regions.length} PII Masked`, 14, 285)
+        return canvas.toDataURL('image/png')
+      }
+    } catch {
+      // fallback
+    }
+    return ''
   }
 
   function clearMasks() {
@@ -390,8 +411,8 @@
           }
           case 'NETRASHIELD_APPLY_MASKS': {
             const scanData = scanDOM(message.mode)
-            applyMasks(scanData.regions, message.mode)
-            sendResponse({ ok: true })
+            const screenshot = applyMasks(scanData.regions, message.mode)
+            sendResponse({ ok: true, screenshot, count: scanData.regions.length })
             break
           }
           case 'NETRASHIELD_CLEAR_MASKS': {

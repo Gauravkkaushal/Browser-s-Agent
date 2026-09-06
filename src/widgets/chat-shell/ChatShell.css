@@ -291,3 +291,88 @@
   font-size: 0.72rem;
   line-height: 1.35;
 }
+
+.masked-proof-card {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  background: rgba(6, 12, 22, 0.88);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35), 0 0 12px rgba(16, 185, 129, 0.15);
+  padding: 10px;
+  margin: 6px 0;
+  animation: netrashieldProofIn 0.35s ease-out forwards;
+}
+
+@keyframes netrashieldProofIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.masked-proof-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.masked-proof-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: #34d399;
+}
+
+.masked-proof-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 6px #10b981;
+}
+
+.masked-proof-count {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #94a3b8;
+  background: rgba(30, 41, 59, 0.7);
+  padding: 2px 7px;
+  border-radius: 9999px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.masked-proof-img-wrap {
+  position: relative;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(52, 211, 153, 0.25);
+  max-height: 140px;
+}
+
+.masked-proof-img {
+  width: 100%;
+  height: auto;
+  display: block;
+  object-fit: cover;
+  transition: transform 0.25s ease;
+}
+
+.masked-proof-img:hover {
+  transform: scale(1.03);
+}
+
+.masked-proof-tag {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: #a7f3d0;
+  background: rgba(6, 78, 59, 0.85);
+  padding: 2px 6px;
+  border-radius: 4px;
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(52, 211, 153, 0.3);
+}
+

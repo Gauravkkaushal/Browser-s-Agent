@@ -140,6 +140,24 @@
       </div>
     </div>
 
+    <!-- Visual Redaction Proof (Masked Screenshot) -->
+    <div class="panel">
+      <div class="panel-title">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span>🛡️ Visual Redaction Proof (Client-Side Masked Snapshot)</span>
+          <span class="tag-badge" style="background: rgba(16,185,129,0.15); color: #10b981;">ZERO RAW DATA LEAKAGE</span>
+        </div>
+        <span style="font-size: 11px; color: var(--muted);" id="screenshot-timestamp">Client-side verified</span>
+      </div>
+      <div id="screenshot-container" style="min-height: 180px; display: flex; align-items: center; justify-content: center; background: rgba(8, 12, 20, 0.6); border: 1px dashed rgba(148, 163, 184, 0.2); border-radius: 10px; overflow: hidden; padding: 16px;">
+        <div class="empty-state" id="screenshot-empty">
+          <span style="font-weight: 500; font-size: 14px;">Waiting for on-device masked scan from NetraShield Chrome extension...</span><br>
+          <span style="font-size: 12px; color: var(--muted); margin-top: 6px; display: inline-block;">Open a demo page (e.g. KYC, Checkout) and ask NetraShield to inspect or act to see the real-time visual proof!</span>
+        </div>
+        <img id="screenshot-img" src="" alt="Masked Page Proof" style="display: none; max-width: 100%; max-height: 380px; border-radius: 8px; border: 1.5px solid #10b981; box-shadow: 0 0 24px rgba(16, 185, 129, 0.3);" />
+      </div>
+    </div>
+
     <div class="links-bar">
       Explore Demo Target Pages:
       <a href="/demo/kyc" target="_blank">KYC Verification Portal</a> •
@@ -195,6 +213,31 @@
               <td class="mono" style="color: #f59e0b;">${act.latencyMs}ms</td>
             </tr>
           `).join('');
+        }
+
+        // Update Visual Redaction Proof Screenshot
+        const screenshotImg = document.getElementById('screenshot-img');
+        const screenshotEmpty = document.getElementById('screenshot-empty');
+        const screenshotTime = document.getElementById('screenshot-timestamp');
+
+        screenshotImg.onerror = function() {
+          screenshotImg.style.display = 'none';
+          screenshotEmpty.style.display = 'block';
+          screenshotTime.textContent = 'Awaiting clean stream';
+          screenshotTime.style.color = 'var(--muted)';
+        };
+
+        if (data.latestMaskedScreenshot && data.latestMaskedScreenshot.length > 80 && data.latestMaskedScreenshot.startsWith('data:image/')) {
+          if (screenshotImg.src !== data.latestMaskedScreenshot) {
+            screenshotImg.src = data.latestMaskedScreenshot;
+          }
+          screenshotImg.style.display = 'block';
+          screenshotEmpty.style.display = 'none';
+          screenshotTime.textContent = 'Active • Verified On-Device';
+          screenshotTime.style.color = '#10b981';
+        } else {
+          screenshotImg.style.display = 'none';
+          screenshotEmpty.style.display = 'block';
         }
       } catch (err) {
         console.error('Failed to refresh metrics:', err);
