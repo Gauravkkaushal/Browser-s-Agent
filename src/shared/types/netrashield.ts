@@ -60,6 +60,7 @@ export type SanitizedPayload = {
 
 export type AgentRequestPayload = SanitizedPayload & {
   task: string
+  screenshot?: string
 }
 
 export type ScanResult = {
