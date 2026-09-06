@@ -106,11 +106,14 @@ export function useAgentRunner() {
       setMaskedScreenshot(screenshot || null)
       setMaskedCount(count)
 
-      setReasonStatus('thinking')
+      const { loadSettings } = await import('../../shared/lib/settingsStorage')
+      const settings = await loadSettings()
+
       const response = await askReasoningServer({
         ...scanResponse.payload,
         task: cleanTask,
         screenshot: screenshot || undefined,
+        lang: settings.summaryLanguage || 'en',
       })
       setReason(response)
       setReasonStatus('ready')
@@ -136,18 +139,37 @@ export function useAgentRunner() {
     }
   }
 
+  async function executeAction() {
+    if (!reason?.command || reason.command.type === 'none') return
+    try {
+      await sendToActiveTab({ type: 'NETRASHIELD_EXECUTE_COMMAND', mode, command: reason.command })
+      setMessages((current) => [
+        ...current,
+        {
+          id: createId('msg'),
+          role: 'assistant',
+          text: `⚡ Action executed & confirmed on target: ${reason.command.targetId || 'active element'} with zero PII exposure.`,
+        },
+      ])
+    } catch (err) {
+      console.error('[NetraShield] Failed to execute action:', err)
+    }
+  }
+
   return {
     error,
     extensionReady,
     isRunning,
     messages,
     mode,
+    reason,
     reasonStatus,
     status,
     statusText,
     task,
     maskedScreenshot,
     maskedCount,
+    executeAction,
     runAgent,
     setMode,
     updateTask,

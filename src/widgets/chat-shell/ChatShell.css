@@ -406,3 +406,67 @@
   transform: translateY(-1px);
 }
 
+.masked-proof-footer {
+  margin-top: 8px;
+  display: flex;
+}
+
+.audit-download-btn {
+  width: 100%;
+  padding: 6px 10px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  border-radius: 6px;
+  color: #34d399;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+
+.audit-download-btn:hover {
+  background: rgba(16, 185, 129, 0.2);
+  border-color: #10b981;
+  color: #6ee7b7;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.25);
+}
+
+.action-confirm-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1.5px solid #10b981;
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  animation: ns-pop 0.3s ease-out;
+}
+
+.action-confirm-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: #e2e8f0;
+}
+
+.action-confirm-btn.ant-btn {
+  background: #10b981 !important;
+  border-color: #10b981 !important;
+  color: #022c22 !important;
+  font-weight: 700 !important;
+  font-size: 0.75rem !important;
+  height: 28px !important;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.4) !important;
+}
+
+.action-confirm-btn.ant-btn:hover {
+  background: #34d399 !important;
+  border-color: #34d399 !important;
+}
+

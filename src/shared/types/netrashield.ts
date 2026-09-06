@@ -4,10 +4,13 @@ export type ReasonStatus = 'idle' | 'thinking' | 'ready' | 'error'
 
 export type ReasoningEngine = 'auto' | 'onnx' | 'server'
 
+export type SummaryLanguage = 'en' | 'hi' | 'hinglish'
+
 export type UserSettings = {
   reasoningEngine: ReasoningEngine
   serverUrl: string
   privacyMode: PrivacyMode
+  summaryLanguage?: SummaryLanguage
 }
 
 export type SensitiveRegion = {
@@ -39,13 +42,6 @@ export type SanitizedPayload = {
     redactionTypes: Record<string, number>
     coverage: number
   }
-  elements: PageElement[]
-  redactions: Array<{
-    id: string
-    type: string
-    confidence: number
-    box: [number, number, number, number]
-  }>
   pageText?: string
   visualSummary: {
     visualDensity: string
@@ -57,12 +53,20 @@ export type SanitizedPayload = {
       total: number
     }
   }
+  elements: PageElement[]
+  redactions: Array<{
+    id: string
+    type: string
+    confidence: number
+    box: [number, number, number, number]
+  }>
 }
 
 export type AgentRequestPayload = SanitizedPayload & {
   task: string
   screenshot?: string
   pageText?: string
+  lang?: SummaryLanguage
 }
 
 export type ScanResult = {

@@ -14,6 +14,8 @@ export function PopupPage() {
       task={agent.task}
       maskedScreenshot={agent.maskedScreenshot}
       maskedCount={agent.maskedCount}
+      reason={agent.reason}
+      onExecuteAction={agent.executeAction}
       onModeChange={agent.setMode}
       onSubmit={agent.runAgent}
       onTaskChange={agent.updateTask}
