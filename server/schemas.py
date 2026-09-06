@@ -27,6 +27,9 @@ EVENT_TYPES = {
     "RECOVERY_STARTED", "RECOVERY_COMPLETED", "LOGIN_REQUIRED", "LOGIN_DETECTED",
     "TASK_COMPLETED", "TASK_FAILED", "TASK_CANCELLED", "MODEL_CALL_COMPLETED",
     "WS_CONNECTED", "WS_DISCONNECTED", "ERROR",
+    # What was hidden from the model, emitted every step so it can be watched.
+    "MASKING_APPLIED", "SECURITY_BLOCKED", "QUOTED_MESSAGE_READY",
+    "DOCUMENT_READ", "PAGE_READ_BY_SIGHT",
     # transport-level, not part of the task narrative
     "PING", "PONG", "BRIDGE_REQUEST", "BRIDGE_RESPONSE", "STATE_CHANGED",
 }
@@ -92,15 +95,31 @@ class Observation(BaseModel):
     page_state: PageState = Field(default_factory=PageState)
     interactive_elements: List[InteractiveElement] = Field(default_factory=list)
     page_text: str = ""
+    # "html", or "pdf" when Chrome is showing a plugin document whose words are
+    # not in the DOM at all. The loop reads those by fetching the file instead.
+    page_kind: str = "html"
+    # True when this page could only be read from a screenshot, because the
+    # browser forbids content scripts there. Recorded so the UI can say so.
+    read_by_sight: bool = False
+    mask_note: str = ""
     dom_summary: Dict[str, Any] = Field(default_factory=dict)
     focused_element: Optional[Dict[str, Any]] = None
     screenshot: Optional[str] = None
     screenshot_error: Optional[str] = None
     sensitive_boxes: List[List[int]] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
+    # DISTINCT values hidden, per kind. The number of PLACES each was hidden
+    # in is separate: one phone number nested in a dozen containers is one
+    # secret, not a dozen, and reporting it as a dozen made the panel useless.
     pii_redactions: Dict[str, int] = Field(default_factory=dict)
+    pii_occurrences: Dict[str, int] = Field(default_factory=dict)
+    # What each blacked-out box covers. The KIND and its position, never the
+    # value -- so a claim of redaction can actually be checked.
+    masked_regions: List[Dict[str, Any]] = Field(default_factory=list)
     walk_ms: int = 0
     agent_build: str = ""
+    # Set when the page being observed is NOT the tab the user is looking at.
+    user_tab_note: Optional[str] = None
     observed_at: str = Field(default_factory=now_iso)
 
     def element(self, eid: str) -> Optional[InteractiveElement]:
@@ -117,11 +136,8 @@ ALLOWED_ACTIONS = [
     "navigate", "open_tab", "switch_tab", "close_tab", "back", "forward",
     "click", "type", "keypress", "scroll", "hover", "focus", "select",
     "wait", "extract", "screenshot", "submit",
-    # Credentials and files. The model names a credential SLOT, never a value.
     "fill_credential", "download", "upload_file", "list_downloads",
-    # Rewrite the plan once the real objective becomes known, and keep
-    # hold of facts gathered along the way.
-    "replan", "note",
+    "replan", "note", "request_quoted_message",
     "finish", "fail",
 ]
 
@@ -132,7 +148,7 @@ BROWSER_VERBS = {
 }
 TERMINAL_VERBS = {"finish", "fail"}
 # Verbs handled entirely by the loop; they never reach the browser.
-CONTROL_VERBS = {"replan", "note"}
+CONTROL_VERBS = {"replan", "note", "request_quoted_message"}
 
 
 class ExpectedState(BaseModel):
@@ -176,6 +192,37 @@ class ActionParams(BaseModel):
     file_path: Optional[str] = None
     filename_contains: Optional[str] = None
     expected: Optional[ExpectedState] = None
+    purpose: Optional[str] = None
+
+
+    # --- Shapes the model gets wrong, corrected instead of fatal ------------
+    #
+    # A model that names the right verb, the right element and the right text
+    # but writes `expected` as a bare string has not made a mistake worth
+    # killing a task over -- and it did exactly that: a multi-site run died on
+    # `expected: 'https://meet.google.com/'` after everything else was correct.
+    # The intent is unmistakable, so read it rather than throw.
+    @field_validator("expected", mode="before")
+    @classmethod
+    def _coerce_expected(cls, v: Any) -> Any:
+        if v is None or isinstance(v, (dict, ExpectedState)):
+            return v
+        if isinstance(v, list):
+            # Some models wrap it in a list. Take the first usable entry.
+            for item in v:
+                if isinstance(item, dict):
+                    return item
+            v = " ".join(str(i) for i in v)
+        if isinstance(v, str):
+            text = v.strip()
+            if not text:
+                return None
+            # A url is a claim about where you will be; anything else is a
+            # claim about what will be on the page.
+            if text.startswith(("http://", "https://")) or "/" in text.split()[0]:
+                return {"url_contains": text}
+            return {"text_contains": text}
+        return None
 
 
 class ActionProposal(BaseModel):
@@ -185,6 +232,16 @@ class ActionProposal(BaseModel):
     params: ActionParams = Field(default_factory=ActionParams)
     reason: str = ""
     confidence: float = 0.5
+
+    @field_validator("target", mode="before")
+    @classmethod
+    def _coerce_target(cls, v: Any) -> Any:
+        """`"target": "e17"` means the element e17. Read it, do not throw."""
+        if isinstance(v, str):
+            return {"element_id": v.strip()} if v.strip() else {}
+        if isinstance(v, int):
+            return {"tab_id": v}
+        return v
 
     @field_validator("action")
     @classmethod
@@ -215,6 +272,10 @@ class Plan(BaseModel):
     steps: List[PlanStep] = Field(default_factory=list)
     start_url: Optional[str] = None
     notes: str = ""
+    # Set when the message was not a browser task at all -- a greeting, a
+    # question about the agent, a remark. Then this is simply the answer, and
+    # no page is opened, observed or acted on.
+    reply: str = ""
 
 
 # ---------------------------------------------------------------------------

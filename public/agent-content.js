@@ -16,11 +16,11 @@
 // compares this against the file on disk and says so loudly when Chrome is
 // still running an older copy -- a stale content script looks exactly like a
 // broken agent, and that is a miserable thing to debug.
-const AGENT_BUILD = 'b8-typing-strategies'
+const AGENT_BUILD = 'b17-click-not-undone'
 
 const AGENT_EID = 'agentEid'
 const AGENT_NID = 'agentNid'
-const MAX_ELEMENTS = 300
+const MAX_ELEMENTS = 150
 const TEXT_CAP = 160
 const PAGE_TEXT_CAP = 9000
 
@@ -38,9 +38,13 @@ const PII_PATTERNS = [
   { type: 'DL', regex: /\b[A-Z]{2}[0-9]{2}[ -]?(?:19|20)[0-9]{2}[0-9]{7}\b/g },
   { type: 'UPI', regex: /\b[\w.-]+@(?:upi|oksbi|okhdfcbank|okaxis|paytm|ibl|ybl|apl)\b/gi },
   { type: 'EMAIL', regex: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g },
+  // Real numbers are written with spaces and hyphens -- "+91 95577 00749" is
+  // how a phone book, a chat header and a group member list all render one.
+  // Insisting on ten unbroken digits let the commonest form through untouched,
+  // which is the only failure here that actually matters.
   // No leading \b: it would never match before "+", leaving the country code
   // stranded next to the redaction marker.
-  { type: 'PHONE', regex: /(?:\+91[\s-]?)?[6-9]\d{9}\b/g },
+  { type: 'PHONE', regex: /(?:\+?91[\s-]?)?[6-9](?:[\s-]?\d){9}(?!\d)/g },
 ]
 
 const PRICE_REGEX = /(?:₹|Rs\.?|INR|\$|€|£)\s?[\d,]+(?:\.\d{1,2})?/i
@@ -48,26 +52,99 @@ const PRICE_REGEX = /(?:₹|Rs\.?|INR|\$|€|£)\s?[\d,]+(?:\.\d{1,2})?/i
 // Field names whose *values* must never leave the page at all.
 const PROTECTED_FIELD_REGEX = /password|passwd|\botp\b|cvv|cvc|card\s*number|cardnumber|aadhaar|upi\s*pin|\bpin\b|secret|token/i
 
+// Extra patterns applied above the baseline when the operator asks for more.
+// `balanced` adds long digit runs -- account numbers, order ids, membership
+// numbers -- that no task needs to reason about. `strict` additionally hides
+// person names, which is the strongest setting that still lets the agent work,
+// because names the operator typed in their own command are kept.
+const STRICTER_PATTERNS = [
+  { type: 'DIGITS', regex: /\b\d{6,}\b/g, from: 'balanced' },
+  // A bare date is not personal information -- every chat list, inbox and
+  // order history is full of them, and blacking them all out hides the page
+  // while protecting nothing. Only redact a date that is announced as a birth
+  // date.
+  { type: 'DOB', regex: /\b(?:dob|d\.?o\.?b|date of birth|born(?: on)?|birth\s*date)\b[:\s-]*\d{1,2}[/\-.]\d{1,2}[/\-.](?:19|20)?\d{2}\b/gi, from: 'balanced' },
+  { type: 'ADDRESS', regex: /\b\d{1,4}[,\s]+[A-Za-z][A-Za-z\s]{3,30}(?:Road|Rd|Street|St|Lane|Nagar|Colony|Sector|Block)\b/gi, from: 'balanced' },
+  { type: 'NAME', regex: /\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})+\b/g, from: 'strict' },
+]
+
+// Words the operator used in their own command. Redacting these would make the
+// task impossible without protecting anything they have not already said.
+let keepTerms = []
+let privacyMode = 'balanced'
+
+function isKept(text) {
+  const low = String(text).toLowerCase()
+  return keepTerms.some((t) => t.length > 2 && low.indexOf(t) !== -1)
+}
+
+function activeExtraPatterns() {
+  if (privacyMode === 'fast') return []
+  if (privacyMode === 'strict') return STRICTER_PATTERNS
+  return STRICTER_PATTERNS.filter((p) => p.from === 'balanced')
+}
+
 let redactionCounts = {}
+// DISTINCT values hidden, per kind.
+//
+// The counter used to add one per replacement, and redact() runs over every
+// element's name, every element's text and the whole page -- so one phone
+// number nested in a dozen containers was reported as dozens of redactions.
+// A real page produced "2246 PII Masked", which tells a reader nothing and
+// quietly invites them to distrust the whole panel. What matters is how many
+// SECRETS were hidden, with the number of places as supporting detail.
+//
+// These sets hold matched values so they can be counted. They are never
+// serialised, never sent, and never leave this page -- only their sizes are.
+let redactedValues = {}
+let redactionOccurrences = {}
+
+function noteRedaction(type, match) {
+  if (!redactedValues[type]) redactedValues[type] = new Set()
+  redactedValues[type].add(String(match).replace(/\s+/g, ''))
+  redactionOccurrences[type] = (redactionOccurrences[type] || 0) + 1
+  redactionCounts[type] = redactedValues[type].size
+}
 
 function redact(text) {
   if (!text) return ''
   let out = String(text).replace(/\s+/g, ' ').trim()
   for (const p of PII_PATTERNS) {
     p.regex.lastIndex = 0
-    out = out.replace(p.regex, () => {
-      redactionCounts[p.type] = (redactionCounts[p.type] || 0) + 1
+    out = out.replace(p.regex, (match) => {
+      noteRedaction(p.type, match)
+      return '[REDACTED:' + p.type + ']'
+    })
+  }
+  for (const p of activeExtraPatterns()) {
+    p.regex.lastIndex = 0
+    out = out.replace(p.regex, (match) => {
+      // Never hide what the operator themselves asked for.
+      if (isKept(match)) return match
+      noteRedaction(p.type, match)
       return '[REDACTED:' + p.type + ']'
     })
   }
   return out
 }
 
+/** Which kinds of PII are in this text. The kind is reportable; the value never is. */
+function kindsIn(text) {
+  if (!text) return []
+  const out = []
+  for (const p of PII_PATTERNS.concat(activeExtraPatterns())) {
+    p.regex.lastIndex = 0
+    if (p.regex.test(text) && !isKept(text)) out.push(p.type)
+  }
+  return out
+}
+
 function hasPii(text) {
   if (!text) return false
-  return PII_PATTERNS.some((p) => {
+  const all = PII_PATTERNS.concat(activeExtraPatterns())
+  return all.some((p) => {
     p.regex.lastIndex = 0
-    return p.regex.test(text)
+    return p.regex.test(text) && !isKept(text)
   })
 }
 
@@ -322,9 +399,13 @@ const KEEP_ROLES = [
 
 function walk() {
   redactionCounts = {}
+  redactedValues = {}
+  redactionOccurrences = {}
   const started = performance.now()
   const errors = []
   const sensitiveBoxes = []
+  // What each mask is for. Kinds, never values.
+  const maskedRegions = []
   const dpr = window.devicePixelRatio || 1
 
   // Clear last observation's ephemeral ids.
@@ -415,10 +496,24 @@ function walk() {
 
     const inViewport = rect.bottom > 0 && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth
 
-    if (protectedField || hasPii(rawName) || hasPii(rawText)) {
+    // A field holding a secret is always covered. Otherwise judge the element
+    // on the text it OWNS, never on everything nested inside it: a chat row's
+    // innerText sweeps up the name, the preview and the timestamp, so one
+    // number anywhere inside blacks out the whole row. The number's own line
+    // is a separate element and gets covered on its own merits.
+    let ownText = ''
+    for (const node of el.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE) ownText += node.textContent || ''
+    }
+    ownText = ownText.replace(/\s+/g, ' ').trim()
+    const smallEnough = rect.width * rect.height
+      <= window.innerWidth * window.innerHeight * 0.06
+    if (protectedField || (smallEnough && (hasPii(rawName) || hasPii(ownText)))) {
+      // CSS pixels. The screenshot's true scale is measured when it is taken,
+      // because the captured bitmap does not reliably equal viewport * dpr.
       sensitiveBoxes.push([
-        Math.round(rect.left * dpr), Math.round(rect.top * dpr),
-        Math.round(rect.width * dpr), Math.round(rect.height * dpr),
+        Math.round(rect.left), Math.round(rect.top),
+        Math.round(rect.width), Math.round(rect.height),
       ])
     }
 
@@ -441,20 +536,56 @@ function walk() {
   }
 
   // Also record PII found in plain page text so screenshots mask it.
+  //
+  // Match on an element's OWN text, not everything nested inside it. A chat row
+  // is a container: if one line deep inside it holds a phone number, matching on
+  // innerText blacks out the entire row -- name, preview, timestamp and all --
+  // which hides far more than it protects and makes the page unreadable.
+  // Redaction has to be surgical or nobody will trust it.
   try {
-    const blocks = Array.from(document.querySelectorAll('p, span, td, th, li, label, h1, h2, h3, h4, dd, dt, div'))
-      .filter((b) => b.children.length <= 2)
-      .slice(0, 400)
+    const MAX_MASK_AREA = window.innerWidth * window.innerHeight * 0.06
+    // Scan far enough to reach the whole page, not just its beginning.
+    //
+    // This was capped at 900 in DOM ORDER, and a chat app puts thousands of
+    // elements in the conversation list before it gets to the side panel -- so
+    // the contact's phone number, sitting in that panel in plain sight, was
+    // never even looked at. Missing the one number on screen while blacking
+    // out a video thumbnail is the exact opposite of the job.
+    //
+    // The cap can be this high because the expensive part is measured LAST:
+    // hasPii() is plain string work, and getBoundingClientRect -- which forces
+    // layout -- only runs for elements that actually contain something.
+    const blocks = Array.from(document.querySelectorAll(
+      'p, span, td, th, li, label, h1, h2, h3, h4, dd, dt, a, b, strong, em, code, div',
+    )).slice(0, 8000)
+
     for (const b of blocks) {
-      const t = (b.innerText || '').trim()
-      if (!t || t.length > 240) continue
-      if (!hasPii(t)) continue
+      // Only the text this element owns directly. Anything inside a child will
+      // be caught when we reach that child.
+      let own = ''
+      for (const node of b.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) own += node.textContent || ''
+      }
+      own = own.replace(/\s+/g, ' ').trim()
+      if (!own || own.length > 240) continue
+      if (!hasPii(own)) continue
+
       const r = b.getBoundingClientRect()
       if (!isVisible(b, r)) continue
+      // A mask the size of a panel is a mistake, not a redaction.
+      if (r.width * r.height > MAX_MASK_AREA) continue
+
       sensitiveBoxes.push([
-        Math.round(r.left * dpr), Math.round(r.top * dpr),
-        Math.round(r.width * dpr), Math.round(r.height * dpr),
+        Math.round(r.left), Math.round(r.top),
+        Math.round(r.width), Math.round(r.height),
       ])
+      // Say what this box covers -- the KIND only, never the value. A count
+      // with nothing behind it cannot be checked; "PHONE at 1519,297" can.
+      maskedRegions.push({
+        kind: kindsIn(own).join('+') || 'PII',
+        box: [Math.round(r.left), Math.round(r.top),
+              Math.round(r.width), Math.round(r.height)],
+      })
     }
   } catch (e) {
     errors.push('pii-scan: ' + e.message)
@@ -489,9 +620,42 @@ function walk() {
     field_count: f.querySelectorAll('input, textarea, select').length,
   }))
 
+  // Draw live masks on the screen for the hackathon demo!
+  try {
+    document.querySelectorAll('.agent-live-mask').forEach((el) => el.remove())
+    if (sensitiveBoxes.length > 0 && document.body) {
+      for (const b of sensitiveBoxes) {
+        const div = document.createElement('div')
+        div.className = 'agent-live-mask'
+        div.style.position = 'absolute'
+        div.style.left = (b[0] + window.scrollX) + 'px'
+        div.style.top = (b[1] + window.scrollY) + 'px'
+        div.style.width = b[2] + 'px'
+        div.style.height = b[3] + 'px'
+        div.style.backgroundColor = '#111827'
+        div.style.color = 'rgba(255, 255, 255, 0.4)'
+        div.style.display = 'flex'
+        div.style.alignItems = 'center'
+        div.style.justifyContent = 'center'
+        div.style.fontSize = '10px'
+        div.style.fontWeight = 'bold'
+        div.style.borderRadius = '2px'
+        div.style.zIndex = '2147483647' // Maximum possible z-index
+        div.style.pointerEvents = 'none' // Don't block clicks!
+        if (b[2] > 40 && b[3] > 15) {
+          div.innerText = 'REDACTED'
+        }
+        document.body.appendChild(div)
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
+
   return {
     url: location.href,
     title: redact(document.title || location.hostname).slice(0, 160),
+    page_kind: detectPageKind(),
     viewport: { w: window.innerWidth, h: window.innerHeight, dpr: dpr },
     scroll: {
       x: Math.round(window.scrollX),
@@ -513,11 +677,66 @@ function walk() {
     focused_element: focusedInfo,
     screenshot: null,
     sensitive_boxes: sensitiveBoxes.slice(0, 200),
+    masked_regions: maskedRegions.slice(0, 200),
     errors: errors,
     pii_redactions: Object.assign({}, redactionCounts),
+    pii_occurrences: Object.assign({}, redactionOccurrences),
     agent_build: AGENT_BUILD,
+    privacy_mode: privacyMode,
     walk_ms: Math.round(performance.now() - started),
     observed_at: new Date().toISOString(),
+  }
+}
+
+/**
+ * What KIND of document this is, when it is not ordinary HTML.
+ *
+ * Chrome renders a PDF with its built-in viewer, and that viewer is a plugin
+ * document: the DOM contains an <embed> and nothing else. Walking it finds no
+ * text and no controls, which looks exactly like a broken page -- so the agent
+ * scrolls, waits, switches tabs and eventually gives up, when the truth is
+ * simply that the words are not in the DOM at all. Naming the kind lets the
+ * loop fetch and read the file instead of hunting for elements that cannot
+ * exist.
+ */
+function detectPageKind() {
+  try {
+    if ((document.contentType || '').toLowerCase() === 'application/pdf') return 'pdf'
+    const embed = document.querySelector('embed[type="application/pdf"], object[type="application/pdf"]')
+    if (embed) return 'pdf'
+    if (/\.pdf(?:[?#]|$)/i.test(location.pathname + location.search)) return 'pdf'
+  } catch (e) { /* ignore */ }
+  return 'html'
+}
+
+/** Read a document's bytes as base64, with the page's own credentials. */
+const MAX_DOCUMENT_BYTES = 12 * 1024 * 1024
+
+async function fetchDocumentBytes(url) {
+  const res = await fetch(url, { credentials: 'include' })
+  if (!res.ok) {
+    return { ok: false, error: 'fetching the document returned HTTP ' + res.status }
+  }
+  const buf = await res.arrayBuffer()
+  if (buf.byteLength > MAX_DOCUMENT_BYTES) {
+    return {
+      ok: false,
+      error: 'the document is ' + Math.round(buf.byteLength / 1048576) + 'MB, over the '
+        + Math.round(MAX_DOCUMENT_BYTES / 1048576) + 'MB limit',
+    }
+  }
+  const bytes = new Uint8Array(buf)
+  let binary = ''
+  const CHUNK = 0x8000
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK))
+  }
+  return {
+    ok: true,
+    url: url,
+    bytes: bytes.length,
+    content_type: res.headers.get('content-type') || '',
+    data: btoa(binary),
   }
 }
 
@@ -637,22 +856,48 @@ async function doClick(el) {
 
   try { (target.focus ? target : el).focus({ preventScroll: true }) } catch (e) { /* ignore */ }
 
-  const before = document.querySelectorAll('*').length
+  // Watch for ANY reaction, not just a change in how many nodes exist.
+  //
+  // The count was a bad proxy and it made this function undo its own work. A
+  // menu button is a TOGGLE: the first click opens it, a second closes it. If
+  // the menu had not finished rendering when the count was compared -- and 120
+  // milliseconds is not long for a framework menu -- the fallback fired a
+  // second, native click and shut the menu again. The page ended up exactly as
+  // it started, so the agent concluded the click had failed and tried again,
+  // and again, and again, each attempt cancelling itself the same way.
+  //
+  // A mutation observer sees what the count misses: a menu opening flips
+  // aria-expanded, adds a class, moves focus. Any of that is proof the element
+  // reacted and no fallback is wanted.
+  let reacted = false
+  let observer = null
+  try {
+    observer = new MutationObserver(() => { reacted = true })
+    observer.observe(document.documentElement, {
+      childList: true, subtree: true, attributes: true,
+    })
+  } catch (e) { /* observation is an optimisation, not a requirement */ }
+
+  const beforeFocus = document.activeElement
   firePointer(target, 'pointerdown', pt)
   fireMouse(target, 'mousedown', pt)
   firePointer(target, 'pointerup', pt)
   fireMouse(target, 'mouseup', pt)
   fireMouse(target, 'click', pt)
 
-  // Some frameworks only act on a native activation. If the synthetic sequence
-  // moved nothing at all, fall back to the element's own click().
-  await sleep(120)
+  // Give a real UI time to respond before deciding it did not.
+  await sleep(320)
+  if (observer) { try { observer.disconnect() } catch (e) { /* ignore */ } }
+  if (document.activeElement !== beforeFocus) reacted = true
+
+  // Only when NOTHING stirred is a native activation worth trying.
   let usedNativeFallback = false
-  if (document.querySelectorAll('*').length === before) {
+  if (!reacted) {
     const clickable = (target.closest && target.closest('a[href],button,[role="button"],[role="listitem"],[role="row"],[onclick]')) || el
     try {
       clickable.click()
       usedNativeFallback = true
+      await sleep(150)
     } catch (e) { /* ignore */ }
   }
 
@@ -664,6 +909,9 @@ async function doClick(el) {
       ? 'the element itself'
       : (target.tagName || '?').toLowerCase() + ' inside it',
     native_fallback: usedNativeFallback,
+    // Whether the page visibly reacted. The verifier can use this to tell a
+    // click that did nothing from one whose effect it simply cannot name.
+    page_reacted: reacted,
   }
 }
 
@@ -1123,10 +1371,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === 'AGENT_OBSERVE') {
     try {
+      privacyMode = message.privacy_mode || 'balanced'
+      keepTerms = (message.keep_terms || []).map((t) => String(t).toLowerCase())
       sendResponse({ ok: true, observation: walk() })
     } catch (e) {
       sendResponse({ ok: false, error: 'walk failed: ' + e.message })
     }
+    return true
+  }
+
+  if (message.type === 'AGENT_FETCH_DOCUMENT') {
+    // Fetch the document's raw bytes FROM THE PAGE, so the request carries the
+    // user's own cookies and session. A PDF behind a login is the normal case
+    // for a college portal, and fetching it server-side would just get the
+    // sign-in page back.
+    fetchDocumentBytes(message.url || location.href)
+      .then((r) => sendResponse(r))
+      .catch((e) => sendResponse({ ok: false, error: String((e && e.message) || e) }))
     return true
   }
 

@@ -59,7 +59,7 @@ def _text_of(obs: Observation) -> str:
 
 
 def verify(action: ActionProposal, before: Observation, after: Observation,
-           exec_result: Dict[str, Any]) -> Verdict:
+           exec_result: Dict[str, Any], last_typed: str = "") -> Verdict:
     # `signals` is evidence that something really changed. `notes` explains the
     # reasoning and must never, by itself, make a verdict look positive.
     signals: List[str] = []
@@ -88,6 +88,29 @@ def verify(action: ActionProposal, before: Observation, after: Observation,
             reason="the text did not land in the field. Do not act on it as though "
                    "it had -- focus the field and type again, or find the right field",
         )
+
+    # ---- 0b. Did the thing that was typed actually get submitted? ----------
+    #
+    # The clearest evidence that a message was sent is that it LEFT the box you
+    # typed it into. Predictions cannot see this: "the page contains my text" is
+    # true before and after, so it proves nothing, and the agent concludes the
+    # send failed and sends again. Duplicate messages are worse than an
+    # unverified one, so check the composer directly.
+    if last_typed and action.action in ("click", "keypress", "submit"):
+        needle = " ".join(last_typed.split())[:80].lower()
+        if needle:
+            def _in_a_field(o: Observation) -> bool:
+                return any(el.is_editable and needle in " ".join((el.value or "").split()).lower()
+                           for el in o.interactive_elements)
+
+            if _in_a_field(before) and not _in_a_field(after):
+                return Verdict(
+                    verdict="success",
+                    signals=["the text left the field it was typed into",
+                             "this is what a completed send/submit looks like"],
+                    reason="the composer emptied, so what you typed was submitted. "
+                           "Do not send it again.",
+                )
 
     # ---- 1. The model's own prediction ------------------------------------
     #
@@ -169,6 +192,17 @@ def verify(action: ActionProposal, before: Observation, after: Observation,
                            reason="only some predicted changes are present")
 
     # ---- 2. Generic state-change signals ----------------------------------
+    #
+    # The executor watched the page while it clicked. A menu opening, a class
+    # flipping, focus moving -- none of that necessarily shows up in the coarse
+    # comparisons below, and calling such a click "no observable change" is how
+    # an agent ends up pressing the same button five times.
+    if action.action == "click" and result.get("page_reacted"):
+        # This alone is enough to call the click successful further down. That
+        # is the point: a menu opening is real progress, and reporting it as a
+        # failure is what sent the agent back to press the same button again --
+        # which on a toggle simply closes what it had just opened.
+        signals.append("the page reacted to the click (DOM or focus changed)")
     if before.url != after.url:
         signals.append("url changed: %s -> %s" % (before.url[:60], after.url[:60]))
     if before.scroll.get("y") != after.scroll.get("y"):

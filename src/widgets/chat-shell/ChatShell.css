@@ -376,3 +376,280 @@
   border: 1px solid rgba(52, 211, 153, 0.3);
 }
 
+
+/* ---- approval gate -------------------------------------------------------
+   Rendered inside the thread, in the same visual family as the masked-proof
+   card, so the moment that needs a human reads as part of the conversation
+   rather than as an interruption from somewhere else.                       */
+.approval-card {
+  border: 1px solid rgba(240, 198, 116, 0.42);
+  background: rgba(58, 42, 8, 0.34);
+  border-radius: 14px;
+  padding: 12px 14px;
+  margin-top: 10px;
+}
+.approval-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #f0c674;
+}
+.approval-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f0c674;
+  box-shadow: 0 0 0 3px rgba(240, 198, 116, 0.18);
+}
+.approval-live {
+  margin-left: auto;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: #ffb4ae;
+}
+.approval-action {
+  margin-top: 9px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  color: #f7f3ec;
+  word-break: break-word;
+}
+.approval-text {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.28);
+  font-size: 12.5px;
+  color: #f7f3ec;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.approval-meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  margin: 10px 0 0;
+  font-size: 11px;
+}
+.approval-meta dt { color: rgba(247, 243, 236, 0.5); }
+.approval-meta dd { margin: 0; color: rgba(247, 243, 236, 0.86); word-break: break-all; }
+.approval-img {
+  width: 100%;
+  margin-top: 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.approval-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* ---- pre-approval toggle ---- */
+.preapprove-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 4px 0;
+  font-size: 11px;
+  color: rgba(247, 243, 236, 0.62);
+  cursor: pointer;
+}
+.preapprove-row input {
+  width: 13px;
+  height: 13px;
+  accent-color: #d29922;
+  cursor: pointer;
+}
+
+.stop-button { border-radius: 999px; }
+
+/* Chrome tears the popup down whenever the agent takes focus, so offer a
+   window that survives it. Quiet until hovered -- it is a convenience, not
+   the main action. */
+.assistant-header { justify-content: space-between; }
+.detach-button {
+  color: rgba(247, 243, 236, 0.5);
+  font-size: 11px;
+  padding: 0 6px;
+  height: 24px;
+}
+.detach-button:hover { color: #a9c4ff; }
+
+/* Detached window.
+   As a browser-action popup the shell is a fixed 390x600 tile. In its own
+   window it should own the whole frame instead, so the layout still looks
+   right after the window is resized. */
+html.detached,
+html.detached body,
+html.detached #root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  min-width: 0;
+  min-height: 0;
+}
+html.detached .chat-popup {
+  width: 100%;
+  height: 100vh;
+  max-height: none;
+  border-radius: 0;
+}
+
+/* The redaction proof sits between the conversation and the composer rather
+   than inside the thread. In the thread it was always the last child, so every
+   new line arrived ABOVE it and the newest message was never at the bottom --
+   which is the one thing a chat has to get right. Docked here it stays in
+   view the whole time without displacing the conversation. */
+.masked-proof-dock {
+  flex: 0 0 auto;
+  margin: 0 12px;
+}
+
+.masked-proof-dock .masked-proof-card {
+  margin: 0 0 8px;
+}
+
+/* ---- The privacy shield -------------------------------------------------
+   Masking that nobody can see is indistinguishable from no masking at all.
+   This panel is the receipt: what was hidden, how much of it, and — when you
+   open it — the exact text the model received, [REDACTED:…] markers and all. */
+.shield-panel {
+  flex: 0 0 auto;
+  margin: 0 12px 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  border-radius: 10px;
+  background: rgba(6, 20, 16, 0.85);
+}
+
+.shield-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #d1fae5;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.shield-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.8);
+}
+
+.shield-title { flex: 1; }
+.shield-caret { color: #6ee7b7; font-size: 0.9rem; }
+
+.shield-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 7px;
+}
+
+.shield-chip {
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(52, 211, 153, 0.3);
+  background: rgba(16, 185, 129, 0.12);
+  color: #a7f3d0;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.shield-chip.regions { border-color: rgba(96, 165, 250, 0.35); background: rgba(59, 130, 246, 0.12); color: #bfdbfe; }
+.shield-chip.danger { border-color: rgba(248, 113, 113, 0.45); background: rgba(239, 68, 68, 0.14); color: #fecaca; }
+.shield-chip.quiet { border-color: #303646; background: transparent; color: #8b93a7; font-weight: 500; }
+
+.shield-note {
+  margin: 8px 0 5px;
+  color: #8b93a7;
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
+.shield-note code {
+  padding: 0 3px;
+  border-radius: 3px;
+  background: rgba(16, 185, 129, 0.15);
+  color: #6ee7b7;
+}
+
+.shield-sample {
+  max-height: 128px;
+  margin: 0;
+  padding: 7px 8px;
+  overflow: auto;
+  border-radius: 6px;
+  background: #080b11;
+  color: #cbd5e1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.64rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.shield-injections {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  color: #fecaca;
+  font-size: 0.66rem;
+  line-height: 1.5;
+}
+
+.shield-blocked {
+  margin: 7px 0 0;
+  padding: 6px 8px;
+  border-left: 2px solid #ef4444;
+  border-radius: 0 6px 6px 0;
+  background: rgba(239, 68, 68, 0.1);
+  color: #fecaca;
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
+/* What the agent can actually see, shown while you write rather than after a
+   plan has been built and discarded. */
+.page-line {
+  margin: 0 14px 4px;
+  color: #8b93a7;
+  font-size: 0.68rem;
+  letter-spacing: 0.01em;
+}
+
+.page-line.none {
+  color: #fca5a5;
+  font-weight: 600;
+}
+
+/* Said out loud when a capture could NOT be masked. A privacy tool that stays
+   quiet about its own gaps is worse than one that has none to report. */
+.shield-warn {
+  margin: 7px 0 0;
+  padding: 6px 8px;
+  border-left: 2px solid #f59e0b;
+  border-radius: 0 6px 6px 0;
+  background: rgba(245, 158, 11, 0.1);
+  color: #fde68a;
+  font-size: 0.66rem;
+  line-height: 1.45;
+}

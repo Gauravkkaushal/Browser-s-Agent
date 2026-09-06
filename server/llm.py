@@ -18,6 +18,41 @@ from . import config
 from .events import bus
 
 
+# --- one connection pool for the whole process -----------------------------
+#
+# Every model call used to build its own AsyncClient, which means a fresh TCP
+# connection and a fresh TLS handshake to the API -- on a task that takes forty
+# model calls, that is forty handshakes bought and thrown away. A shared client
+# keeps the connection open and reuses it, and enables HTTP/2 where the provider
+# offers it.
+#
+# The timeout matters just as much. It used to be 90 seconds per provider, so a
+# single hung endpoint stalled the whole task for a minute and a half before the
+# ladder even got to try the next rung -- and the whole point of having a ladder
+# is that the next rung is usually fine. Connecting is given a short leash;
+# reading is given enough room for a slow-but-alive model.
+HTTP_TIMEOUT = httpx.Timeout(connect=6.0, read=45.0, write=15.0, pool=5.0)
+_CLIENT: Optional[httpx.AsyncClient] = None
+
+
+def client() -> httpx.AsyncClient:
+    global _CLIENT
+    if _CLIENT is None or _CLIENT.is_closed:
+        _CLIENT = httpx.AsyncClient(
+            timeout=HTTP_TIMEOUT,
+            limits=httpx.Limits(max_keepalive_connections=8, max_connections=16),
+        )
+    return _CLIENT
+
+
+async def aclose() -> None:
+    global _CLIENT
+    if _CLIENT is not None and not _CLIENT.is_closed:
+        await _CLIENT.aclose()
+    _CLIENT = None
+
+
+
 class ModelError(RuntimeError):
     pass
 
@@ -89,24 +124,41 @@ class OpenAICompatible(Provider):
     def _models_for(self, role: str) -> List[str]:
         return self.planner_models if role == "planner" else self.reasoner_models
 
-    async def _attempt(self, model: str, key: str, system: str,
-                       user: str) -> Tuple[Optional[str], Optional[str], Optional[float]]:
+    async def _attempt(self, model: str, key: str, system: str, user: str,
+                       image_b64: str = "",
+                       no_json_mode: bool = False) -> Tuple[Optional[str], Optional[str], Optional[float]]:
         """Return (text, error, retry_after_seconds)."""
+        # With an image the user turn becomes a list of parts. Everything else
+        # about the request is unchanged.
+        content: Any = user
+        if image_b64:
+            content = [
+                {"type": "text", "text": user},
+                {"type": "image_url",
+                 "image_url": {"url": "data:image/jpeg;base64," + image_b64}},
+            ]
         body = {
             "model": model,
             "messages": [
                 {"role": "system", "content": system},
-                {"role": "user", "content": user},
+                {"role": "user", "content": content},
             ],
             "response_format": {"type": "json_object"},
             "temperature": 0.1,
         }
+        if no_json_mode:
+            # Some rungs answer 400 "Tool choice is none, but model called a
+            # tool" when json_object mode is set -- the model tries to satisfy
+            # it with a tool call the request forbids. Asking in words works,
+            # and parse_json copes with a fenced or prose-wrapped object.
+            body.pop("response_format", None)
+            body["messages"][0]["content"] = (
+                system + "\n\nReply with a single JSON object and nothing else.")
         headers = {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
         headers.update(self.extra_headers)
         try:
-            async with httpx.AsyncClient(timeout=90.0) as client:
-                res = await client.post(self.base_url + "/chat/completions",
-                                        headers=headers, json=body)
+            res = await client().post(self.base_url + "/chat/completions",
+                                      headers=headers, json=body)
         except httpx.HTTPError as exc:
             return None, "%s/%s -> %s" % (self.name, model, exc), None
 
@@ -130,22 +182,33 @@ class OpenAICompatible(Provider):
         except (ValueError, KeyError, IndexError) as exc:
             return None, "%s/%s -> malformed response: %s" % (self.name, model, exc), None
 
-    async def complete(self, role: str, system: str, user: str) -> Tuple[str, str]:
+    async def complete(self, role: str, system: str, user: str,
+                       image_b64: str = "") -> Tuple[str, str]:
         errors: List[str] = []
         for model in self._models_for(role):
             for offset in range(max(1, len(self.keys))):
                 idx = (self._key_index + offset) % len(self.keys)
                 key = self.keys[idx]
 
-                text, err, wait = await self._attempt(model, key, system, user)
+                text, err, wait = await self._attempt(model, key, system, user, image_b64)
                 if text is not None:
                     self._key_index = idx
                     return text, model
 
+                # A model that refuses json_object mode will refuse it every
+                # time. Ask again in plain words rather than burning the rung.
+                if err and "called a tool" in err:
+                    text, err2, _ = await self._attempt(
+                        model, key, system, user, image_b64, no_json_mode=True)
+                    if text is not None:
+                        self._key_index = idx
+                        return text, model
+                    err = err2 or err
+
                 # A short rate-limit window is worth sitting out once.
                 if wait is not None and wait <= MAX_429_WAIT_S:
                     await asyncio.sleep(wait + 0.4)
-                    text, err2, _ = await self._attempt(model, key, system, user)
+                    text, err2, _ = await self._attempt(model, key, system, user, image_b64)
                     if text is not None:
                         self._key_index = idx
                         return text, model
@@ -164,8 +227,13 @@ class Gemini(Provider):
 
     name = "gemini"
 
+    def __init__(self) -> None:
+        # Start wherever the last call left off, so load spreads across keys
+        # instead of always hammering the first one.
+        self._key_index = 0
+
     def available(self) -> bool:
-        return bool(config.GEMINI_API_KEY)
+        return bool(config.GEMINI_API_KEYS)
 
     def _models_for(self, role: str) -> List[str]:
         return config.GEMINI_PLANNER_MODELS if role == "planner" else config.GEMINI_REASONER_MODELS
@@ -189,30 +257,66 @@ class Gemini(Provider):
             cfg["thinkingConfig"] = {"thinkingLevel": "LOW"}
         return cfg
 
-    async def complete(self, role: str, system: str, user: str) -> Tuple[str, str]:
+    async def complete(self, role: str, system: str, user: str,
+                       image_b64: str = "") -> Tuple[str, str]:
         errors: List[str] = []
+        keys = config.GEMINI_API_KEYS or [""]
+        # Keys the API has already refused outright during this call. Retrying
+        # them on the next rung only wastes a round trip each time.
+        dead: set = set()
         for model in self._models_for(role):
+            parts: List[Dict[str, Any]] = [{"text": user}]
+            if image_b64:
+                parts.append({"inline_data": {"mime_type": "image/jpeg",
+                                              "data": image_b64}})
             body = {
                 "systemInstruction": {"parts": [{"text": system}]},
-                "contents": [{"role": "user", "parts": [{"text": user}]}],
+                "contents": [{"role": "user", "parts": parts}],
                 "generationConfig": self._generation_config(model),
             }
             url = ("https://generativelanguage.googleapis.com/v1beta/models/"
                    + model + ":generateContent")
-            try:
-                async with httpx.AsyncClient(timeout=90.0) as client:
-                    res = await client.post(
+
+            # The free tier's request-per-day allowance is counted per KEY, so
+            # a second key is a second day's worth. Rotate through them before
+            # stepping down to a weaker model: a fresh key on the good rung
+            # beats an exhausted key on a worse one.
+            res = None
+            throttled = 0
+            for offset in range(len(keys)):
+                idx = (self._key_index + offset) % len(keys)
+                if idx in dead:
+                    continue
+                try:
+                    attempt = await client().post(
                         url, json=body,
-                        headers={"x-goog-api-key": config.GEMINI_API_KEY,
+                        headers={"x-goog-api-key": keys[idx],
                                  "Content-Type": "application/json"},
                     )
-            except httpx.HTTPError as exc:
-                errors.append("gemini/%s -> %s" % (model, exc))
-                continue
+                except httpx.HTTPError as exc:
+                    errors.append("gemini/%s -> %s" % (model, exc))
+                    continue
+                if attempt.status_code in (429, 503):
+                    # This key is spent (or the model is busy); try the next.
+                    throttled += 1
+                    continue
+                if attempt.status_code in (401, 403):
+                    # A revoked or unauthorised key answers this on EVERY model,
+                    # so without skipping it here one dead key poisons the whole
+                    # ladder -- every rung fails on the same permission error
+                    # while two working keys sit unused behind it.
+                    dead.add(idx)
+                    throttled += 1
+                    continue
+                self._key_index = idx
+                res = attempt
+                break
 
-            if res.status_code in (429, 503):
-                # Overloaded or throttled: the next rung is usually free.
-                errors.append("gemini/%s -> HTTP %d" % (model, res.status_code))
+            if res is None:
+                errors.append(
+                    "gemini/%s -> all %d key(s) throttled, refused or unreachable%s"
+                    % (model, throttled or len(keys),
+                       " (%d key(s) permanently refused)" % len(dead) if dead else ""))
                 continue
             if res.status_code >= 400:
                 detail = ""
@@ -242,17 +346,20 @@ class Ollama(Provider):
     def available(self) -> bool:
         return True  # cheap to try; fails fast when not running
 
-    async def complete(self, role: str, system: str, user: str) -> Tuple[str, str]:
+    async def complete(self, role: str, system: str, user: str,
+                       image_b64: str = "") -> Tuple[str, str]:
+        if image_b64:
+            raise ModelError("the local ollama rung does not take images here")
         body = {
             "model": config.OLLAMA_MODEL,
             "prompt": system + "\n\n" + user + "\n\nReturn JSON only.",
             "stream": False,
             "format": "json",
         }
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            res = await client.post(config.OLLAMA_HOST.rstrip("/") + "/api/generate", json=body)
-            res.raise_for_status()
-            data = res.json()
+        res = await client().post(config.OLLAMA_HOST.rstrip("/") + "/api/generate",
+                                  json=body)
+        res.raise_for_status()
+        data = res.json()
         return data.get("response", "{}"), config.OLLAMA_MODEL
 
 
@@ -348,7 +455,71 @@ async def call(role: str, system: str, user: str,
             step=step,
         )
         return parsed
-    raise ModelError("all providers failed -> " + " | ".join(errors))
+    raise ModelError(_explain_chain_failure(errors))
+
+
+def _explain_chain_failure(errors: List[str]) -> str:
+    """Say what a reader can act on, then the detail.
+
+    A hundred lines of provider errors is not an explanation. Nearly always the
+    real story is one of three things -- the day's free quota is gone, the
+    credit is gone, or a model has been retired -- and each has a different
+    answer.
+    """
+    blob = " | ".join(errors)
+    lead: List[str] = []
+    if "429" in blob or "rate limit" in blob.lower():
+        lead.append(
+            "every model rung is rate limited. Free tiers cap REQUESTS PER DAY, "
+            "and the light models allow far more of them than the full ones -- "
+            "put the *-flash-lite rungs first in GEMINI_REASONER_MODELS"
+        )
+    if "402" in blob:
+        lead.append("the OpenRouter key is out of credit (HTTP 402)")
+    if "404" in blob and "no longer available" in blob:
+        lead.append(
+            "a configured model has been retired (HTTP 404) -- remove it from "
+            "the ladder in .env"
+        )
+    if "All connection attempts failed" in blob:
+        lead.append("the local ollama fallback is not running")
+    if not lead:
+        lead.append("no model provider could answer")
+    return "; ".join(lead) + ".\n\nDetail: " + blob[:900]
+
+
+async def call_vision(role: str, system: str, user: str, image_b64: str,
+                      task_id: Optional[str] = None, step: int = 0) -> Dict[str, Any]:
+    """Ask a model to read an IMAGE, for pages no content script can reach.
+
+    chrome:// pages, the Web Store and Chrome's own PDF viewer are closed to
+    extensions by the browser itself -- no amount of retrying opens them. A
+    picture of the screen is the only thing left, and it is what a person in
+    the same position would use.
+
+    Rungs that cannot see stay in the ladder and simply fail their attempt; the
+    next one is tried. If none can, that is reported rather than guessed at.
+    """
+    if not CHAIN:
+        raise ModelError("no model provider configured")
+    errors: List[str] = []
+    for provider in CHAIN:
+        started = time.perf_counter()
+        try:
+            raw, model = await provider.complete(role, system, user, image_b64=image_b64)
+            parsed = parse_json(raw)
+        except Exception as exc:  # noqa: BLE001 - every rung's failure is reportable
+            errors.append("%s: %s" % (provider.name, exc))
+            continue
+        await bus.emit("MODEL_CALL_COMPLETED", {
+            "role": role, "provider": provider.name, "model": model,
+            "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+            "chars_in": len(system) + len(user), "chars_out": len(raw),
+            "image_bytes": len(image_b64), "vision": True,
+            "fallbacks_before": len(errors),
+        }, task_id=task_id, step=step)
+        return parsed
+    raise ModelError("no model in the chain could read an image -> " + " | ".join(errors[:4]))
 
 
 async def health() -> Dict[str, Any]:

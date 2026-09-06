@@ -136,8 +136,20 @@ def evaluate(action: ActionProposal, observation: Optional[Observation]) -> Poli
         rules.append("submit-verb")
 
     # ---- HIGH: consequential control name ---------------------------------
+    #
+    # Judged on the control, not on the word alone. A composer's placeholder is
+    # very often "Send a message" or "Message ChatGPT", and clicking one of
+    # those only puts the caret in a box -- it commits nothing and there is
+    # nothing to undo. Stopping to ask about it is not caution, it is noise,
+    # and noise is what trains someone to hit Approve without reading. The
+    # button that actually sends is not editable, so that one still stops.
     if verb == "click" and name and HIGH_RISK_NAME.search(name):
-        rules.append("high-risk-control-name:" + name[:40])
+        el = observation.element(action.target.element_id) if (
+            observation and action.target.element_id) else None
+        focusing_a_field = el is not None and (
+            el.is_editable or el.role in ("textbox", "searchbox", "combobox"))
+        if not focusing_a_field:
+            rules.append("high-risk-control-name:" + name[:40])
 
     # ---- HIGH: typing into a protected field ------------------------------
     if verb == "type":

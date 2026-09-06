@@ -32,14 +32,26 @@ OPENAI_PLANNER_MODELS = [m.strip() for m in os.getenv("OPENAI_PLANNER_MODELS", "
 OPENAI_REASONER_MODELS = [m.strip() for m in os.getenv("OPENAI_REASONER_MODELS", "gpt-4o").split(",") if m.strip()]
 
 # ---- Gemini ----
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+# Several keys rotate. The free tier counts requests-per-day per KEY, so a
+# second key is literally a second day's allowance -- and the single-key
+# version spent the whole budget partway through one task.
+def split_keys(value: str) -> list:
+    """Comma-separated keys, blanks and stray spaces discarded."""
+    return [k.strip() for k in (value or "").split(",") if k.strip()]
+
+
+GEMINI_API_KEYS = split_keys(
+    os.getenv("GEMINI_API_KEYS") or os.getenv("GEMINI_API_KEY", "")
+)
+# Kept for anything still reading the singular name.
+GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""
 GEMINI_PLANNER_MODELS = [m.strip() for m in os.getenv(
     "GEMINI_PLANNER_MODELS",
-    "gemini-flash-lite-latest,gemini-3.5-flash-lite,gemini-2.5-flash-lite",
+    "gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-flash-lite-latest",
 ).split(",") if m.strip()]
 GEMINI_REASONER_MODELS = [m.strip() for m in os.getenv(
     "GEMINI_REASONER_MODELS",
-    "gemini-flash-lite-latest,gemini-3.5-flash-lite,gemini-3.6-flash,gemini-2.5-flash",
+    "gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-flash-lite-latest,gemini-3.6-flash",
 ).split(",") if m.strip()]
 
 # ---- Ollama ----
@@ -47,12 +59,19 @@ OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 
 # ---- Loop guards ----
+# Somewhere harmless to stand when the browser has no ordinary page open at
+# all. A blank tab is not injectable, so it has to be a real http(s) address.
+FALLBACK_START_URL = os.getenv("FALLBACK_START_URL", "https://www.google.com/")
+
 MAX_STEPS = int(os.getenv("MAX_STEPS", "60"))
 # How many times a task may rewrite its own plan. Open-ended commands need at
 # least one; more than a few means it is going in circles.
 MAX_REPLANS = int(os.getenv("MAX_REPLANS", "3"))
 WALL_CLOCK_S = float(os.getenv("WALL_CLOCK_S", "600"))
-CONFIRM_TIMEOUT_S = float(os.getenv("CONFIRM_TIMEOUT_S", "120"))
+# Long enough that stepping away does not silently cancel a send. A short
+# budget here does not make anything safer -- it just turns "I did not answer
+# in two minutes" into "the message never went", with no obvious cause.
+CONFIRM_TIMEOUT_S = float(os.getenv("CONFIRM_TIMEOUT_S", "900"))
 LOGIN_TIMEOUT_S = float(os.getenv("LOGIN_TIMEOUT_S", "300"))
 LOGIN_POLL_S = float(os.getenv("LOGIN_POLL_S", "3"))
 SCREENSHOT_EVERY = int(os.getenv("SCREENSHOT_EVERY", "5"))

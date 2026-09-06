@@ -8,9 +8,23 @@ declare namespace chrome {
     const lastError: { message?: string } | undefined
     function sendMessage(message: unknown, callback?: (response?: any) => void): void
     function getManifest(): { version: string; [key: string]: unknown }
+    function getURL(path: string): string
   }
   namespace tabs {
     function create(properties: { url: string; active?: boolean }): void
+  }
+  namespace windows {
+    function create(
+      properties: {
+        url: string
+        type?: string
+        width?: number
+        height?: number
+        left?: number
+        top?: number
+      },
+      callback?: (created?: unknown) => void,
+    ): void
   }
   namespace storage {
     const local: {

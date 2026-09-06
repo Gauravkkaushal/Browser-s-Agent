@@ -23,15 +23,46 @@ from .events import bus
 from .schemas import Observation, now_iso
 
 
-@lru_cache(maxsize=1)
-def _expected_build() -> str:
-    """The build id in the content script on disk."""
-    path = Path(__file__).parent.parent / "public" / "agent-content.js"
+_BUILD_CACHE: Dict[str, Any] = {"mtime": None, "value": ""}
+
+
+def _expected_sw_build() -> str:
+    """The build id in the service worker on disk.
+
+    Chrome keeps running the old worker until the extension is reloaded, and
+    tab resolution -- the thing that decides which page the agent works on --
+    lives there. Without this, a fix and a stale worker look identical from the
+    server, which is how the same bug gets reported as unfixed three times.
+    """
+    path = Path(__file__).parent.parent / "public" / "agent-background.js"
     try:
-        m = _re.search(r"const AGENT_BUILD = '([^']+)'", path.read_text(encoding="utf-8"))
+        m = _re.search(r"const AGENT_SW_BUILD = '([^']+)'", path.read_text(encoding="utf-8"))
         return m.group(1) if m else ""
     except OSError:
         return ""
+
+
+def _expected_build() -> str:
+    """The build id in the content script on disk.
+
+    Re-read when the file changes. Caching this for the life of the process
+    made the staleness check lie in the worst possible direction: after a
+    rebuild the server still remembered the OLD id and accused a correctly
+    reloaded extension of being out of date.
+    """
+    path = Path(__file__).parent.parent / "public" / "agent-content.js"
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return ""
+    if _BUILD_CACHE["mtime"] != mtime:
+        try:
+            m = _re.search(r"const AGENT_BUILD = '([^']+)'", path.read_text(encoding="utf-8"))
+            _BUILD_CACHE["value"] = m.group(1) if m else ""
+            _BUILD_CACHE["mtime"] = mtime
+        except OSError:
+            return ""
+    return str(_BUILD_CACHE["value"])
 
 
 class BridgeError(RuntimeError):
@@ -46,6 +77,8 @@ class BrowserBridge:
         self._connected_at: Optional[str] = None
         self._connect_count = 0
         self._stale_warned = False
+        # Which build of the service worker Chrome is actually running.
+        self._sw_build = ""
 
     # -- connection ---------------------------------------------------------
     @property
@@ -62,20 +95,38 @@ class BrowserBridge:
             "session_id": self._session_id,
             "connected_at": self._connected_at,
             "connect_count": self._connect_count,
+            "sw_build": self._sw_build,
+            "expected_sw_build": _expected_sw_build(),
             "pending_requests": len(self._pending),
         }
 
-    async def attach(self, socket, session_id: str) -> None:
+    async def attach(self, socket, session_id: str, sw_build: str = "") -> None:
         self._stale_warned = False
         self._socket = socket
         self._session_id = session_id
         self._connected_at = now_iso()
         self._connect_count += 1
+        self._sw_build = sw_build
+        expected = _expected_sw_build()
+        stale = bool(sw_build and expected and sw_build != expected)
         await bus.emit("WS_CONNECTED", {
             "session_id": session_id,
             "connect_count": self._connect_count,
+            "sw_build": sw_build or "(this extension reports no build id)",
+            "expected_sw_build": expected,
+            "stale_service_worker": stale,
             "note": "reconnect resumes the same session" if self._connect_count > 1 else "first connection",
         })
+        if stale or (expected and not sw_build):
+            await bus.emit("ERROR", {
+                "error": "Chrome is running an OLD service worker (%s) but the code on "
+                         "disk is %r. Tab handling, navigation and screenshots all live "
+                         "there, so those fixes are NOT active. Run `npm run build`, then "
+                         "open chrome://extensions and press reload on Browser Agent."
+                         % (repr(sw_build) if sw_build else "no build id at all",
+                            expected),
+                "stale_service_worker": True,
+            })
 
     async def detach(self, socket) -> None:
         if self._socket is not socket:
@@ -132,8 +183,12 @@ class BrowserBridge:
 
     # -- typed helpers ------------------------------------------------------
     async def observe(self, task_id: Optional[str] = None, screenshot: bool = False,
-                      tab_id: Optional[int] = None) -> Observation:
-        raw = await self.request("observe", {"screenshot": screenshot, "tab_id": tab_id}, task_id=task_id)
+                      tab_id: Optional[int] = None, privacy_mode: str = "balanced",
+                      keep_terms: Optional[list] = None) -> Observation:
+        raw = await self.request("observe", {
+            "screenshot": screenshot, "tab_id": tab_id,
+            "privacy_mode": privacy_mode, "keep_terms": keep_terms or [],
+        }, task_id=task_id)
         obs = Observation.model_validate(raw)
         await self._warn_if_stale(obs, task_id)
         return obs

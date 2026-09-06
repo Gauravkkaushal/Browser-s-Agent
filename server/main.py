@@ -27,6 +27,12 @@ from .loop import registry
 
 app = FastAPI(title="Browser Agent", version="2.0.0")
 
+@app.on_event("shutdown")
+async def _close_http_pool() -> None:
+    """Release the shared model-API connection pool on the way out."""
+    await llm.aclose()
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -268,7 +274,7 @@ async def debug_bridge(body: BridgeCall):
 async def ws_agent(socket: WebSocket):
     await socket.accept()
     session_id = socket.query_params.get("session_id", "unknown")
-    await bridge.attach(socket, session_id)
+    attached = False
     try:
         while True:
             raw = await socket.receive_text()
@@ -280,6 +286,12 @@ async def ws_agent(socket: WebSocket):
 
             # Keepalive: Chrome only holds the service worker open while
             # messages flow, so answer every ping promptly.
+            if not attached and mtype != "WS_CONNECTED":
+                # An extension old enough not to announce itself still has to
+                # work; it simply reports no build, which is itself the warning.
+                await bridge.attach(socket, session_id, sw_build="")
+                attached = True
+
             if mtype == "PING":
                 await socket.send_json({"v": 1, "type": "PONG", "payload": {}})
                 continue
@@ -288,6 +300,15 @@ async def ws_agent(socket: WebSocket):
                 bridge.resolve(payload.get("req_id", ""), payload)
                 continue
             if mtype == "WS_CONNECTED":
+                # The worker announces which build of itself is running. Attach
+                # here so that build is known from the first moment, and a stale
+                # extension is called out before it can quietly misbehave.
+                if not attached:
+                    await bridge.attach(
+                        socket, session_id,
+                        sw_build=str((msg.get("payload") or {}).get("sw_build") or ""),
+                    )
+                    attached = True
                 continue
     except WebSocketDisconnect:
         pass
@@ -310,8 +331,12 @@ async def ws_cockpit(socket: WebSocket):
         "payload": {
             "browser_connected": bridge.connected,
             "model_chain": llm.chain_names(),
-            "replay": bus.replay(60),
+            "replay": [e for e in bus.replay(500) if e.get("task_id") == registry.active_task_id or not e.get("task_id")],
             "active_task": registry.active_task_id,
+            # Everything a UI needs to redraw itself after being closed: the
+            # thread so far, the pending approval, and the last masked snapshot.
+            "snapshot": (registry.get(None).snapshot()
+                         if registry.get(None) is not None else None),
         },
     })
 
@@ -354,7 +379,9 @@ async def _handle_cockpit_message(msg: Dict[str, Any], socket: WebSocket) -> Non
             })
             return
         try:
-            await registry.start(command, pre_approved=bool(payload.get("pre_approved")))
+            await registry.start(command,
+                                 pre_approved=bool(payload.get("pre_approved")),
+                                 privacy_mode=str(payload.get("privacy_mode") or "balanced"))
         except RuntimeError as exc:
             await bus.emit("ERROR", {"error": str(exc)})
         return
@@ -364,7 +391,10 @@ async def _handle_cockpit_message(msg: Dict[str, Any], socket: WebSocket) -> Non
         if task is None:
             await bus.emit("ERROR", {"error": "no task to confirm"})
             return
-        task.confirm(mtype == "CONFIRMATION_GRANTED")
+        # scope="task" is the operator answering for the whole run rather than
+        # for this one action, so they are not asked again at every step.
+        task.confirm(mtype == "CONFIRMATION_GRANTED",
+                     scope=str(payload.get("scope") or "once"))
         return
 
     if mtype == "TASK_CANCEL":

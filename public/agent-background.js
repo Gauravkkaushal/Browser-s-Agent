@@ -11,6 +11,14 @@
  * No site-specific logic lives here.
  */
 
+// Bump this whenever this file changes. Chrome keeps running the OLD service
+// worker until the extension is reloaded, and a stale worker reproduces bugs
+// that were fixed on disk hours ago -- indistinguishable from a broken agent
+// unless something says so out loud. The content script has carried a build id
+// for exactly this reason; the worker had none, so every fix to tab resolution
+// (which lives HERE) was unverifiable from the outside.
+const AGENT_SW_BUILD = 'sw-b4-vision-fallback'
+
 const DEFAULT_SERVER = 'ws://127.0.0.1:8787/ws/agent'
 const KEEPALIVE_MS = 20000
 const BACKOFF_MIN_MS = 1500
@@ -104,6 +112,7 @@ async function connect() {
       session_id: sid,
       user_agent: navigator.userAgent,
       extension_version: chrome.runtime.getManifest().version,
+      sw_build: AGENT_SW_BUILD,
     })
     startKeepalive()
     setBadge('ON', '#0f766e')
@@ -176,6 +185,13 @@ function setBadge(text, color) {
 // ---------------------------------------------------------------------------
 // Tab helpers
 // ---------------------------------------------------------------------------
+function isInjectable(url) {
+  if (!url) return false
+  if (url.indexOf('chrome-extension://') === 0) return false
+  if (url.indexOf('localhost:8787/cockpit') !== -1 || url.indexOf('127.0.0.1:8787/cockpit') !== -1) return false
+  return /^https?:\/\//.test(url)
+}
+
 async function resolveTabId(requested) {
   if (requested) return requested
   await recallCurrentTab()
@@ -202,33 +218,70 @@ async function resolveTabId(requested) {
     }
   }
 
-  // 3. The user's active tab -- but ONLY if an extension can actually run
-  // there. chrome://, the Web Store and PDF viewers are closed to us, and
-  // silently adopting one of those makes every later step fail for a reason
-  // that has nothing to do with the task.
+  // 3. The user's active tab, when an extension can actually run there.
+  //
+  // It very often cannot, and that is NOT a reason to give up: the agent's own
+  // window is a chrome-extension:// page, and a task started from it makes that
+  // window the last-focused one. Throwing here instead of falling through to
+  // step 4 meant every task launched from the detached window died on "cannot
+  // operate on this page" while the real web page sat open one tab away.
   const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
   if (active && isInjectable(active.url)) {
     currentTabId = active.id
     return active.id
   }
 
-  // 4. Any other ordinary web page.
+  // 4. Any other ordinary web page, most recently looked at first -- that is
+  // the one the user was last actually reading.
   const any = await chrome.tabs.query({})
+  any.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))
   const usable = any.find((t) => isInjectable(t.url))
   if (usable) {
     currentTabId = usable.id
     return usable.id
   }
 
+  // Only now is there genuinely nowhere to work.
+  const activeKind = active && active.url ? String(active.url).split('/')[0] + '//...' : ''
   throw new Error(
-    'no ordinary web page is open for the agent to work in' +
-    (active && active.url ? ' (the active tab is ' + active.url.split('/')[0] + '//..., which blocks extensions)' : '') +
-    '. Open any http(s) page and try again.'
+    'no ordinary web page is open for the agent to work in'
+    + (activeKind ? ' (the page in front of you is ' + activeKind
+        + ', which extensions cannot read)' : '')
+    + '. Open any http(s) page and try again.'
   )
 }
 
-function isInjectable(url) {
-  return /^https?:\/\//.test(url || '')
+/**
+ * Which page the agent WOULD work on, without deciding anything.
+ *
+ * resolveTabId commits: it records the tab as the one being driven. Calling it
+ * from a status poll would let the popup quietly retarget a running task, so
+ * this mirrors the same preference order and touches nothing.
+ */
+async function peekTargetTab() {
+  const consider = async (id) => {
+    try {
+      const tab = await chrome.tabs.get(id)
+      return isInjectable(tab.url) ? tab : null
+    } catch (e) {
+      return null
+    }
+  }
+
+  if (currentTabId != null) {
+    const tab = await consider(currentTabId)
+    if (tab) return tab
+  }
+  for (const id of Array.from(agentOwnedTabs).reverse()) {
+    const tab = await consider(id)
+    if (tab) return tab
+  }
+  const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
+  if (active && isInjectable(active.url)) return active
+
+  const any = await chrome.tabs.query({})
+  any.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))
+  return any.find((t) => isInjectable(t.url)) || null
 }
 
 async function ensureContentScript(tabId) {
@@ -292,7 +345,7 @@ async function listTabs() {
 // Screenshots: capture -> mask sensitive boxes -> jpeg base64.
 // The canvas is used ONLY to black out regions; nothing is ever drawn.
 // ---------------------------------------------------------------------------
-async function captureRedacted(tabId, sensitiveBoxes) {
+async function captureRedacted(tabId, sensitiveBoxes, viewport) {
   const tab = await chrome.tabs.get(tabId)
   let dataUrl
   try {
@@ -306,10 +359,26 @@ async function captureRedacted(tabId, sensitiveBoxes) {
     const canvas = new OffscreenCanvas(bmp.width, bmp.height)
     const ctx = canvas.getContext('2d')
     ctx.drawImage(bmp, 0, 0)
+
+    // Measure the scale from the image we actually got, rather than trusting
+    // devicePixelRatio. The captured bitmap regularly differs from
+    // viewport * dpr -- browser chrome and scrollbars are not in it -- and a
+    // mask computed from the wrong factor slides off the very text it exists
+    // to cover, which is worse than no mask at all because it looks redacted.
+    const scaleX = viewport && viewport.w ? bmp.width / viewport.w : 1
+    const scaleY = viewport && viewport.h ? bmp.height / viewport.h : 1
+    // A little bleed, so anti-aliased glyph edges cannot peek out.
+    const pad = Math.max(2, Math.round(2 * scaleY))
+
     ctx.fillStyle = '#000000'
     for (const b of sensitiveBoxes || []) {
       if (!Array.isArray(b) || b.length < 4) continue
-      ctx.fillRect(b[0], b[1], b[2], b[3])
+      ctx.fillRect(
+        Math.round(b[0] * scaleX) - pad,
+        Math.round(b[1] * scaleY) - pad,
+        Math.round(b[2] * scaleX) + pad * 2,
+        Math.round(b[3] * scaleY) + pad * 2,
+      )
     }
     const out = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.7 })
     const buf = await out.arrayBuffer()
@@ -443,36 +512,148 @@ async function handleBridgeRequest(payload) {
     case 'ping':
       return { ok: true, result: { pong: true, current_tab: currentTabId } }
 
+    case 'new_task': {
+      // Forget which tab the last task was working in. Without this a fresh
+      // task silently resumes wherever the previous one finished -- so asking
+      // about the page in front of you gets answered about whatever tab the
+      // agent happened to leave open.
+      const previous = currentTabId
+      currentTabId = null
+      try { await chrome.storage.session.remove('agentCurrentTab') } catch (e) { /* ignore */ }
+      const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
+      const startHere = active && isInjectable(active.url) ? active.id : null
+      if (startHere != null) await rememberCurrentTab(startHere)
+      return {
+        ok: true,
+        result: {
+          released_tab: previous,
+          starting_tab: startHere,
+          starting_url: startHere != null ? (active.url || '').slice(0, 120) : null,
+          note: startHere == null
+            ? 'the page you are looking at cannot be read by an extension'
+            : 'starting from the tab you are looking at',
+        },
+      }
+    }
+
     case 'tabs':
       return { ok: true, result: { tabs: await listTabs(), active_tab_id: await resolveTabId(null) } }
 
     case 'observe': {
       const tabId = await resolveTabId(args.tab_id)
-      const r = await callContent(tabId, { type: 'AGENT_OBSERVE' })
+      // Say plainly when the page the USER is looking at is not the page being
+      // observed. A request like "summarise this page" made from a chrome://
+      // tab must not be quietly answered about some other tab that happened to
+      // be open -- that produces a confident answer about the wrong thing.
+      let userTabNote = null
+      try {
+        const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
+        if (active && active.id !== tabId) {
+          userTabNote = isInjectable(active.url)
+            ? 'the user is looking at a different tab (' + (active.url || '').slice(0, 80) + ')'
+            : 'the tab the user is looking at is ' + String(active.url || '').split('/')[0]
+              + '//... which extensions cannot read at all, so this observation is of a '
+              + 'DIFFERENT page. If the task refers to "this page", say you cannot read it.'
+        }
+      } catch (e) { /* ignore */ }
+      const r = await callContent(tabId, {
+        type: 'AGENT_OBSERVE',
+        privacy_mode: args.privacy_mode || 'balanced',
+        keep_terms: args.keep_terms || [],
+      })
       if (!r || !r.ok) return { ok: false, error: (r && r.error) || 'observe failed' }
       const obs = r.observation
       obs.tabs = await listTabs()
       obs.active_tab_id = tabId
+      obs.user_tab_note = userTabNote
       if (args.screenshot) {
-        const shot = await captureRedacted(tabId, obs.sensitive_boxes)
+        const shot = await captureRedacted(tabId, obs.sensitive_boxes, obs.viewport)
         obs.screenshot = shot.ok ? shot.screenshot : null
         obs.screenshot_error = shot.ok ? null : shot.error
       }
       return { ok: true, result: obs }
     }
 
+    case 'capture_any': {
+      // A picture of a page an extension is not allowed to read.
+      //
+      // chrome://, the Web Store and Chrome's own PDF viewer are closed to
+      // content scripts by the browser itself, so there is no DOM to walk and
+      // no amount of retrying opens one. Capturing the pixels is the only way
+      // left -- and it is exactly what a person looking at the same screen
+      // would go on.
+      //
+      // Masking is best-effort here and USUALLY IMPOSSIBLE: locating sensitive
+      // text needs the content script that this page will not run. The reply
+      // says which happened, so nobody is told a page was redacted when it was
+      // not.
+      const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
+      const tab = args.tab_id != null ? await chrome.tabs.get(args.tab_id) : active
+      if (!tab) return { ok: false, error: 'there is no active tab to capture' }
+
+      let boxes = []
+      let viewport = null
+      let masked = false
+      if (isInjectable(tab.url)) {
+        try {
+          const r = await callContent(tab.id, {
+            type: 'AGENT_OBSERVE',
+            privacy_mode: args.privacy_mode || 'balanced',
+            keep_terms: args.keep_terms || [],
+          })
+          if (r && r.ok) {
+            boxes = r.observation.sensitive_boxes || []
+            viewport = r.observation.viewport
+            masked = true
+          }
+        } catch (e) { /* no content script here; capture unmasked */ }
+      }
+
+      const shot = await captureRedacted(tab.id, boxes, viewport)
+      if (!shot.ok) return { ok: false, error: shot.error }
+      return {
+        ok: true,
+        result: {
+          screenshot: shot.screenshot,
+          url: tab.url || '',
+          title: tab.title || '',
+          masked: masked,
+          masked_regions: boxes.length,
+          mask_note: masked
+            ? 'sensitive regions were located and blacked out before capture'
+            : 'this page does not allow a content script, so no region could be '
+              + 'located to black out; the capture is unredacted',
+        },
+      }
+    }
+
+    case 'fetch_document': {
+      // The bytes come from the PAGE, not from here: a fetch in the service
+      // worker would not carry the site's cookies, and a document behind a
+      // login is the ordinary case, not the exception.
+      const tabId = await resolveTabId(args.tab_id)
+      const r = await callContent(tabId, {
+        type: 'AGENT_FETCH_DOCUMENT',
+        url: args.url || null,
+      })
+      if (!r || !r.ok) return { ok: false, error: (r && r.error) || 'could not read the document' }
+      return { ok: true, result: r }
+    }
+
     case 'screenshot': {
       const tabId = await resolveTabId(args.tab_id)
       let boxes = args.sensitive_boxes
+      let viewport = args.viewport
       if (!boxes) {
         try {
           const r = await callContent(tabId, { type: 'AGENT_OBSERVE' })
           boxes = r && r.ok ? r.observation.sensitive_boxes : []
+          viewport = r && r.ok ? r.observation.viewport : null
         } catch (e) {
           boxes = []
         }
       }
-      const shot = await captureRedacted(tabId, boxes)
+      const shot = await captureRedacted(tabId, boxes, viewport)
       return shot.ok ? { ok: true, result: shot } : { ok: false, error: shot.error }
     }
 
@@ -657,7 +838,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || !message.type) return false
   if (message.type === 'AGENT_STATUS') {
     getSessionId().then((sid) => {
-      sendResponse({ connected: connected, session_id: sid, current_tab: currentTabId })
+      // Also say WHICH page the agent would work on right now. The popup shows
+      // this before you type, because "there is no page to read" is something
+      // you need to know while writing the command -- not thirty seconds later
+      // when a plan has already been made and thrown away.
+      peekTargetTab().then((tab) => sendResponse({
+        connected: connected, session_id: sid,
+        current_tab: currentTabId, sw_build: AGENT_SW_BUILD,
+        target_url: tab ? (tab.url || '') : '',
+        target_title: tab ? (tab.title || '') : '',
+      })).catch(() => sendResponse({
+        connected: connected, session_id: sid,
+        current_tab: currentTabId, sw_build: AGENT_SW_BUILD,
+        target_url: '', target_title: '',
+      }))
     })
     return true
   }

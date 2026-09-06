@@ -16,12 +16,19 @@ import re
 import time
 import uuid
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
-from . import config, planner, reasoner, recovery, verifier
+from . import config, documents, planner, reasoner, recovery, verifier
 from .browser_bridge import BridgeError, bridge
 from .events import bus
+from . import llm
 from .llm import ModelError
+from .reasoner import MalformedAction
 from .policy import evaluate, redact_preview
+from .redaction import redact_text
+from .sanitizer import sanitize_observation
+from .quoter import compose_message
+from .capability_gate import check as check_capability
 from .vault import mask, vault
 from .schemas import (
     BROWSER_VERBS, CONTROL_VERBS, ActionProposal, Observation, Plan,
@@ -52,6 +59,36 @@ PLACEHOLDER_STEP = re.compile(
 )
 
 
+# An honest "there was nothing to act on". Distinguishing this from giving up
+# matters: the first is a real answer, the second is a dodge.
+NOTHING_TO_DO = re.compile(
+    r"no (specific |actionable |explicit |clear |further |new )*"
+    r"(command|request|task|instruction|action|message)"
+    r"|nothing to (do|act on)"
+    r"|did not (ask|request|give)"
+    r"|has not (asked|requested|sent)"
+    r"|no one (asked|requested)",
+    re.I,
+)
+
+
+# Ways the browser says "you may not read this page". None of them is a fault
+# that retrying fixes; all of them leave a screenshot as the only way in.
+_UNREADABLE_PAGE = re.compile(
+    r"cannot operate on this page|chrome:// and store pages|"
+    r"no ordinary web page is open|extensions cannot read",
+    re.I,
+)
+
+
+def _site_of(url: str) -> str:
+    """Just the host, for noticing that the agent has moved somewhere new."""
+    try:
+        return (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
 class TaskCancelled(Exception):
     pass
 
@@ -59,7 +96,8 @@ class TaskCancelled(Exception):
 class Task:
     """One running task. Owns its own FSM state and audit trail."""
 
-    def __init__(self, command: str, pre_approved: bool = False) -> None:
+    def __init__(self, command: str, pre_approved: bool = False,
+                 privacy_mode: str = "balanced") -> None:
         self.task_id = "task_" + uuid.uuid4().hex[:10]
         self.command = command
         # The operator may pre-authorise this one task's high-risk actions
@@ -68,6 +106,12 @@ class Task:
         # answer is recorded as coming from a standing authorisation rather
         # than being invented by the agent.
         self.pre_approved = pre_approved
+        # How hard the page-side redaction should work before anything leaves
+        # the machine. Words from the operator's own command are never hidden --
+        # withholding them protects nothing they have not already said, and it
+        # would make the task impossible.
+        self.privacy_mode = privacy_mode
+        self.keep_terms = [w.strip(".,!?'\"") for w in command.split() if len(w) > 2][:24]
         self.state = "PLANNING"
         self.step = 0
         self.started = time.monotonic()
@@ -79,12 +123,22 @@ class Task:
         self._recent_signatures: List[str] = []
         self._last_failed_signature: str = ""
         self._dead_targets: Dict[str, str] = {}
+        self._last_shot_site: str = ""
+        # What was last typed successfully. The clearest proof a submit
+        # worked is that this text has left the field it was typed into.
+        self._last_typed: str = ""
+        # The most recent masked snapshot, kept so a UI that was closed and
+        # reopened can show what was redacted rather than an empty card.
+        self.last_screenshot: Optional[str] = None
         self._replans = 0
         self.discovered: str = ""
         self.notes: List[str] = []
         self.cancelled = False
         self.summary: str = ""
         self.error: str = ""
+        self.quoted_message: Optional[str] = None
+        # PDF text by url. A paper does not change between steps.
+        self._document_cache: Dict[str, str] = {}
         self._confirm_future: Optional[asyncio.Future] = None
         self._pending_confirmation: Optional[Dict[str, Any]] = None
 
@@ -107,10 +161,21 @@ class Task:
             "summary": self.summary,
             "error": self.error,
             "pending_confirmation": self._pending_confirmation,
+            "last_screenshot": self.last_screenshot,
+            "privacy_mode": self.privacy_mode,
         }
 
     # -- confirmation -------------------------------------------------------
-    def confirm(self, granted: bool) -> bool:
+    def confirm(self, granted: bool, scope: str = "once") -> bool:
+        """Answer the pending confirmation.
+
+        scope="task" means the operator answered for the whole task, not just
+        this one action: they are not asked again for anything of the same
+        class while it runs. Authentication codes are excluded from that at the
+        policy layer and stay live no matter what is set here.
+        """
+        if granted and scope == "task":
+            self.pre_approved = True
         if self._confirm_future is None or self._confirm_future.done():
             return False
         self._confirm_future.set_result(granted)
@@ -128,7 +193,30 @@ class Task:
     # -- observation --------------------------------------------------------
     async def observe(self, screenshot: bool = False) -> Observation:
         self._guard()
-        obs = await bridge.observe(task_id=self.task_id, screenshot=screenshot)
+        try:
+            obs = await bridge.observe(task_id=self.task_id, screenshot=screenshot,
+                                       privacy_mode=self.privacy_mode,
+                                       keep_terms=self.keep_terms)
+        except BridgeError as exc:
+            # The page refused a content script outright. That is the browser's
+            # rule, not a fault to retry -- and giving up here is what made
+            # "explain this page" answer "no page". Build an observation out of
+            # a screenshot instead, and be explicit that it came from sight.
+            if not _UNREADABLE_PAGE.search(str(exc)):
+                raise
+            obs = Observation(url="", title="", page_kind="unreadable",
+                              errors=["the DOM is closed to extensions: %s" % exc])
+            obs = await self._read_by_sight(obs)
+            if not obs.page_text.strip():
+                raise
+            return obs
+        if obs.screenshot:
+            self.last_screenshot = obs.screenshot
+        obs = await self._read_document_if_needed(obs)
+        # Still nothing to read? Then the DOM was never going to give it up --
+        # a scanned PDF, or a page the browser closes to extensions. Look at it.
+        if not obs.page_text.strip() and not obs.interactive_elements:
+            obs = await self._read_by_sight(obs)
         await bus.emit("OBSERVATION_RECEIVED", {
             "url": obs.url,
             "title": obs.title,
@@ -143,6 +231,7 @@ class Task:
             "tabs": [t.model_dump() for t in obs.tabs],
             "screenshot": obs.screenshot,
             "observed_at": obs.observed_at,
+            "user_tab_note": obs.user_tab_note,
         }, task_id=self.task_id, step=self.step)
         return obs
 
@@ -165,7 +254,9 @@ class Task:
             self._guard()
             await asyncio.sleep(config.LOGIN_POLL_S)
             try:
-                fresh = await bridge.observe(task_id=self.task_id)
+                fresh = await bridge.observe(task_id=self.task_id,
+                                             privacy_mode=self.privacy_mode,
+                                             keep_terms=self.keep_terms)
             except BridgeError:
                 continue
             if fresh.page_state.login_wall is None:
@@ -230,20 +321,50 @@ class Task:
         payload = action.model_dump()
         return await bridge.request("act", {"action": payload}, task_id=self.task_id)
 
-    # -- one full cycle -----------------------------------------------------
     async def step_once(self, obs: Observation) -> Optional[Observation]:
         """observe -> reason -> policy -> execute -> verify. Returns next obs."""
         self.step += 1
+        
+        # The reasoner gets a SEPARATE, sanitized copy. The original stays intact
+        # for grounding, execution and verification -- those have to match the
+        # real page, not a marked-up rendering of it.
+        reasoner_obs, mask_report = sanitize_observation(obs.model_copy(deep=True))
+        # Say out loud, every step, exactly what was hidden before the model saw
+        # anything. A privacy claim nobody can watch is a privacy claim nobody
+        # should believe.
+        await bus.emit("MASKING_APPLIED", mask_report,
+                       task_id=self.task_id, step=self.step)
+
+        # If we have a quoted message, make sure the reasoner knows it has it available
+        if self.quoted_message:
+            reasoner_obs.user_tab_note = (reasoner_obs.user_tab_note or "") + f" [QUOTED_MESSAGE_READY: {self.quoted_message}]"
 
         # --- REASONING ---
         await self.set_state("REASONING")
         try:
             action = await reasoner.propose(
                 self.plan.objective if self.plan else self.command,
-                self.plan, obs, self.history, self.task_id, self.step, self.extracted,
+                self.plan, reasoner_obs, self.history, self.task_id, self.step, self.extracted,
                 discovered=self.discovered, notes=self.notes,
                 dead_targets=self._dead_targets,
             )
+            # Re-ground against the original observation to remove datamarks from the UI
+            from .reasoner import _ground
+            action = _ground(action, obs)
+        except MalformedAction as exc:
+            # An unusable reply costs a step, not the task. This escaping as a
+            # fatal error ended a multi-site run at the final hop because one
+            # optional field arrived as a string instead of an object.
+            await bus.emit("VERIFICATION_FAILED", {
+                "reason": str(exc), "counted_as_strike": False,
+            }, task_id=self.task_id, step=self.step)
+            self.history.append({
+                "step": self.step,
+                "summary": "the model's reply could not be read as an action",
+                "verdict": "rejected",
+                "detail": str(exc)[:200],
+            })
+            return None
         except ModelError as exc:
             raise RuntimeError("the reasoner could not produce a valid action: %s" % exc)
 
@@ -252,11 +373,18 @@ class Task:
         # common way an agent wastes a task. Track the shape of each action and
         # refuse the third identical one, telling the reasoner plainly that this
         # route is exhausted.
-        signature = "%s|%s|%s|%s" % (
+        # The signature must capture everything that makes this action
+        # *different*. Leaving the tab out made every switch_tab look identical,
+        # so moving to a second tab was blocked as a repeat of moving to the
+        # first -- and the page it is judged against matters too, because the
+        # same click on a different page is a different act.
+        signature = "%s|%s|%s|%s|tab=%s|on=%s" % (
             action.action,
             action.target.nid or action.target.element_id or "",
             (action.target.name or "")[:40],
             (action.params.text or action.params.url or action.params.key_combo or "")[:40],
+            action.target.tab_id if action.target.tab_id is not None else "-",
+            obs.url[:80],
         )
         self._recent_signatures.append(signature)
         self._recent_signatures = self._recent_signatures[-12:]
@@ -326,6 +454,7 @@ class Task:
                     "detail": "note needs params.text",
                 })
                 return None
+            
             self.notes.append(fact[:1200])
             await bus.emit("ACTION_EXECUTED", {
                 "action_id": action.action_id, "action": "note",
@@ -336,6 +465,26 @@ class Task:
                 "summary": "note -> recorded a finding",
                 "verdict": "verified",
                 "detail": fact[:200],
+            })
+            return obs
+
+        # --- QUOTER ---
+        if action.action == "request_quoted_message":
+            purpose = action.params.purpose or "Write the outgoing message based on the notes."
+            quoted = await compose_message(self.command, self.notes, purpose)
+            self.quoted_message = quoted
+            
+            self.notes.append(f"Prepared quoted message for purpose '{purpose}': {quoted[:200]}")
+            await bus.emit("ACTION_EXECUTED", {
+                "action_id": action.action_id, "action": "request_quoted_message",
+                "result": {"quoted_message": quoted[:300]},
+            }, task_id=self.task_id, step=self.step)
+            
+            self.history.append({
+                "step": self.step,
+                "summary": "request_quoted_message -> generated outgoing text",
+                "verdict": "verified",
+                "detail": quoted[:200],
             })
             return obs
 
@@ -416,9 +565,9 @@ class Task:
                     })
                     if self._unearned_finishes >= 2:
                         raise RuntimeError(
-                            "the reasoner twice claimed the task was complete without "
-                            "performing a single verified action. Last claim: %s"
-                            % (action.params.summary or action.reason)[:200]
+                            "the task was declared complete twice and rejected twice. "
+                            "Reason: %s Last claim: %s"
+                            % (rejection, (action.params.summary or action.reason)[:200])
                         )
                     return None
                 self.summary = action.params.summary or action.reason
@@ -428,6 +577,34 @@ class Task:
 
         # --- POLICY ---
         await self.set_state("POLICY_CHECK")
+        
+        # 1. Trust boundary / capability gate
+        allowed, block_reason = check_capability(
+            action, obs, self.quoted_message,
+            command=self.command, notes=self.notes, extracted=self.extracted,
+        )
+        if not allowed:
+            await bus.emit("SECURITY_BLOCKED", {
+                "action": action.action,
+                "reason": block_reason,
+                "preview": (action.params.text or "")[:160],
+            }, task_id=self.task_id, step=self.step)
+            await bus.emit("POLICY_DENIED", {
+                "action_id": action.action_id, "action": action.action,
+                "decision": {
+                    "decision": "deny", "risk": "blocked",
+                    "rules_fired": ["security-capability-gate"],
+                    "reason": block_reason,
+                }
+            }, task_id=self.task_id, step=self.step)
+            self.history.append({
+                "step": self.step,
+                "summary": "%s -> BLOCKED by security capability gate" % action.action,
+                "verdict": "denied", "detail": block_reason,
+            })
+            return None
+            
+        # 2. Existing policy rules
         decision = evaluate(action, obs)
         if decision.decision == "deny":
             await bus.emit("POLICY_DENIED", {
@@ -490,6 +667,9 @@ class Task:
             "result": _trim(result),
         }, task_id=self.task_id, step=self.step)
 
+        if action.action == "type" and (result or {}).get("verified"):
+            self._last_typed = action.params.text or ""
+
         if action.action == "extract":
             items = result.get("items") or []
             for item in items:
@@ -499,10 +679,18 @@ class Task:
         # --- VERIFY against a FRESH observation ---
         await self.set_state("VERIFYING")
         await asyncio.sleep(0.15)
+        # Capture whenever the agent lands somewhere new, as well as on the
+        # regular cadence. Arriving at a new site is exactly the moment the
+        # operator wants to see what was blacked out before anything left the
+        # machine -- a proof card that only appears every fifth step is not
+        # much of a proof.
         want_shot = (
-            config.SCREENSHOT_EVERY > 0 and self.step % config.SCREENSHOT_EVERY == 0
+            (config.SCREENSHOT_EVERY > 0 and self.step % config.SCREENSHOT_EVERY == 0)
+            or _site_of(obs.url) != self._last_shot_site
         )
         after = await self.observe(screenshot=want_shot)
+        if want_shot:
+            self._last_shot_site = _site_of(after.url)
 
         # Be patient with a slow site. Judging a page that is still loading is
         # judging a page that has not happened yet -- and calling that a failure
@@ -533,15 +721,23 @@ class Task:
             await asyncio.sleep(0.5)
             after = await self.observe()
 
-        verdict = verifier.verify(action, obs, after, result)
+        verdict = verifier.verify(action, obs, after, result, self._last_typed)
 
         if verdict.verdict == "uncertain":
             await asyncio.sleep(0.5)
             after = await self.observe()
-            verdict = verifier.verify(action, obs, after, result)
+            verdict = verifier.verify(action, obs, after, result, self._last_typed)
 
         if verdict.verdict == "success":
+            if action.action in ("click", "keypress", "submit"):
+                self._last_typed = ""
             self.consecutive_verify_failures = 0
+            # An action that worked is not evidence of going in circles. Forget
+            # it, so a later legitimate repeat of the same shape is not refused
+            # for something that succeeded.
+            self._recent_signatures = [s for s in self._recent_signatures if s != signature]
+            self._dead_targets.pop(action.target.nid or "", None)
+            self._dead_targets.pop(action.target.element_id or "", None)
             await bus.emit("ACTION_VERIFIED", {
                 "action_id": action.action_id, "action": action.action,
                 "verdict": verdict.model_dump(),
@@ -566,7 +762,7 @@ class Task:
             }, task_id=self.task_id, step=self.step)
             await asyncio.sleep(2.0)
             settled = await self.observe()
-            verdict = verifier.verify(action, obs, settled, result)
+            verdict = verifier.verify(action, obs, settled, result, self._last_typed)
             if verdict.verdict == "success":
                 self.consecutive_verify_failures = 0
                 await bus.emit("ACTION_VERIFIED", {
@@ -639,11 +835,19 @@ class Task:
                 None,
             )
             if placeholder:
+                # "There was nothing to do" is a legitimate outcome, not a
+                # dodge -- provided the agent actually went and looked. If it
+                # has done real, verified work and reports finding no request,
+                # accept that; forcing a replan would only make it invent one.
+                looked = any(h.get("verdict") == "verified" for h in self.history)
+                if looked and NOTHING_TO_DO.search(summary):
+                    return None
                 return (
                     "the plan still contains an unresolved step (%r) that was written "
                     "before the real request was known. You have read the request but "
                     "not carried it out. Call `replan` with what is actually being "
-                    "asked, then do it." % placeholder[:90]
+                    "asked, then do it. If there genuinely is no request to act on, "
+                    "say so plainly in the summary." % placeholder[:90]
                 )
 
         # 1. A claimed destination the browser is not at, and never was.
@@ -686,6 +890,149 @@ class Task:
             return await self.observe()
         except BridgeError:
             return None
+
+    async def _first_observation(self) -> Observation:
+        """Get somewhere to stand, opening a page if there is not one.
+
+        A task died on "no ordinary web page is open" while the browser sat
+        there perfectly able to open one. Having nowhere to work is not a
+        failure -- it is the first thing to fix, and opening a tab is exactly
+        what a person would do before saying the job was impossible.
+
+        Only ever a NEW tab: navigating whatever the operator had in front of
+        them would take over their window.
+        """
+        try:
+            return await self.observe(screenshot=True)
+        except BridgeError as exc:
+            if not _UNREADABLE_PAGE.search(str(exc)):
+                raise
+            landing = self.plan.start_url if self.plan else None
+            landing = landing or config.FALLBACK_START_URL
+            await bus.emit("ACTION_EXECUTING", {
+                "action": "open_tab", "preview": "open " + landing,
+                "note": "there was no ordinary web page to work in, so the agent "
+                        "opened one rather than giving up",
+            }, task_id=self.task_id, step=0)
+            try:
+                res = await bridge.request("open_tab", {"url": landing},
+                                           task_id=self.task_id)
+            except BridgeError as open_exc:
+                raise RuntimeError(
+                    "there was no web page open and one could not be opened "
+                    "either: %s" % open_exc
+                ) from open_exc
+            await bus.emit("ACTION_EXECUTED", {"action": "open_tab", "result": res},
+                           task_id=self.task_id, step=0)
+            return await self.observe(screenshot=True)
+
+    async def _read_document_if_needed(self, obs: Observation) -> Observation:
+        """Put a PDF's words into page_text, so the agent can actually read it.
+
+        Chrome's PDF viewer is a plugin document: no text, no controls. Left
+        alone the agent scrolls, waits, switches tabs and gives up -- exactly
+        the shape of a failure that has nothing to do with the task. Fetching
+        the file is not a workaround; it is the only place the words exist.
+
+        Fetched once per URL: a paper does not change between steps, and paying
+        to re-download and re-parse it every step would be its own bug.
+        """
+        if obs.page_kind != "pdf" or obs.page_text.strip():
+            return obs
+        if self._document_cache.get(obs.url) is not None:
+            obs.page_text = self._document_cache[obs.url]
+            return obs
+        try:
+            raw = await bridge.request("fetch_document", {"url": obs.url},
+                                       task_id=self.task_id)
+            info = documents.extract_pdf_text(raw.get("data") or "")
+        except (BridgeError, documents.DocumentError) as exc:
+            # An honest note in the observation beats silence: the reasoner can
+            # then say what is wrong instead of hunting for elements forever.
+            obs.errors = list(obs.errors) + ["could not read this PDF: %s" % exc]
+            self._document_cache[obs.url] = ""
+            await bus.emit("DOCUMENT_READ", {
+                "url": obs.url, "ok": False, "error": str(exc),
+            }, task_id=self.task_id, step=self.step)
+            return obs
+
+        obs.page_text = info["text"]
+        self._document_cache[obs.url] = info["text"]
+        await bus.emit("DOCUMENT_READ", {
+            "url": obs.url, "ok": True, "pages": info["pages"],
+            "pages_with_text": info["pages_with_text"],
+            "chars": len(info["text"]), "bytes": info["bytes"],
+        }, task_id=self.task_id, step=self.step)
+        return obs
+
+    VISION_SYSTEM = (
+        "You are reading a SCREENSHOT of a page that software cannot read any "
+        "other way. Transcribe what is actually on the screen: headings, body "
+        "text, labels on buttons and fields, and any values shown.\n"
+        "Report only what you can see. Never guess at text that is cut off, and "
+        "never invent a value. If the image is unreadable, say so.\n"
+        'Return JSON: {"text": "<everything legible, in reading order>", '
+        '"note": "<anything important about what you could not read>"}'
+    )
+
+    async def _read_by_sight(self, obs: Observation) -> Observation:
+        """Last resort for a page no content script may touch.
+
+        chrome:// pages, the Web Store and Chrome's PDF viewer are closed to
+        extensions by the browser, not by any bug -- so there is no DOM, and
+        stopping is the only honest alternative to looking at the pixels.
+
+        Privacy note, stated plainly because it matters: masking works by
+        locating sensitive TEXT with the content script, and the very pages
+        that need this fallback are the ones that will not run it. When a
+        capture could not be masked, that is recorded on the observation and
+        surfaced in the UI rather than quietly implied to be redacted.
+        """
+        try:
+            shot = await bridge.request("capture_any", {
+                "privacy_mode": self.privacy_mode,
+                "keep_terms": self.keep_terms,
+            }, task_id=self.task_id)
+        except BridgeError as exc:
+            obs.errors = list(obs.errors) + ["could not capture this page: %s" % exc]
+            return obs
+
+        image = shot.get("screenshot") or ""
+        if not image:
+            return obs
+        self.last_screenshot = image
+
+        try:
+            seen = await llm.call_vision(
+                "reasoner", self.VISION_SYSTEM,
+                "The page is at %s. Transcribe it." % (shot.get("url") or obs.url),
+                image, task_id=self.task_id, step=self.step,
+            )
+        except ModelError as exc:
+            obs.errors = list(obs.errors) + ["no model could read the screenshot: %s" % exc]
+            return obs
+
+        # The transcription came off an unmaskable page, so redact it HERE
+        # before it is stored, reasoned over or written into a message. This
+        # does not undo the image already having been sent -- nothing can --
+        # but it keeps the values out of everything downstream.
+        text, redactions = redact_text(str(seen.get("text") or ""))
+        if not text.strip():
+            return obs
+
+        obs.page_text = text
+        obs.pii_redactions = {**(obs.pii_redactions or {}), **redactions}
+        obs.read_by_sight = True
+        obs.mask_note = shot.get("mask_note") or ""
+        await bus.emit("PAGE_READ_BY_SIGHT", {
+            "url": shot.get("url") or obs.url,
+            "chars": len(text),
+            "masked": bool(shot.get("masked")),
+            "mask_note": obs.mask_note,
+            "redacted_after_reading": redactions,
+            "note": seen.get("note", ""),
+        }, task_id=self.task_id, step=self.step)
+        return obs
 
     # -- confirmation gate --------------------------------------------------
     async def _request_confirmation(self, action: ActionProposal, decision,
@@ -734,10 +1081,18 @@ class Task:
         try:
             granted = await asyncio.wait_for(self._confirm_future, config.CONFIRM_TIMEOUT_S)
         except asyncio.TimeoutError:
+            # Nobody answering is NOT the same as somebody saying no, and the
+            # difference matters: this is the path where a message you asked to
+            # be sent quietly never gets sent. Name it for what it is.
             granted = False
+            self.error = ("%s was never carried out: the approval sat unanswered for "
+                          "%.0fs. Nothing was sent. Tick 'don't ask again' if you do "
+                          "not want to be asked each time."
+                          % (redact_preview(action), config.CONFIRM_TIMEOUT_S))
             await bus.emit("CONFIRMATION_DENIED", {
                 "action_id": action.action_id,
-                "reason": "nobody answered within %.0fs" % config.CONFIRM_TIMEOUT_S,
+                "timed_out": True,
+                "reason": self.error,
             }, task_id=self.task_id, step=self.step)
         finally:
             self._confirm_future = None
@@ -761,12 +1116,36 @@ class Task:
         try:
             # --- PLANNING ---
             await self.set_state("PLANNING")
+
+            # Start from where the operator is actually looking, not from
+            # wherever the previous task happened to finish. Inheriting the last
+            # task's tab is how "summarise this page" ends up answering about
+            # something else entirely.
+            try:
+                start = await bridge.request("new_task", {}, task_id=self.task_id)
+                await bus.emit("STATE_CHANGED", {
+                    "state": "PLANNING",
+                    "detail": start.get("note", ""),
+                    "starting_url": start.get("starting_url"),
+                }, task_id=self.task_id, step=0)
+            except BridgeError:
+                pass
+
             try:
                 seed = await bridge.observe(task_id=self.task_id)
                 current_url = seed.url
             except BridgeError:
                 current_url = ""
             self.plan = await planner.make_plan(self.command, self.task_id, current_url)
+
+            # "hello" is not a browser task. Answer it and stop -- before a plan
+            # is announced, before a tab is opened, before anything is observed.
+            # Narrating a plan to greet someone and then failing because no web
+            # page happened to be open is a worse answer than saying nothing.
+            if self.plan.reply and not self.plan.steps:
+                self.summary = self.plan.reply
+                raise _Finished()
+
             await bus.emit("PLAN_GENERATED", self.plan.model_dump(),
                            task_id=self.task_id, step=0)
 
@@ -785,7 +1164,12 @@ class Task:
 
             # --- MAIN LOOP ---
             await self.set_state("OBSERVING")
-            obs = await self.observe()
+            # Capture on the very first look. This is the moment the operator
+            # most wants to see what was blacked out -- and for a task answered
+            # by reading alone, which never executes an action, it is the only
+            # chance to take one at all.
+            obs = await self._first_observation()
+            self._last_shot_site = _site_of(obs.url)
 
             while True:
                 self._guard()
@@ -819,7 +1203,10 @@ class Task:
             await self.set_state("CANCELLED")
             await bus.emit("TASK_CANCELLED", {
                 "steps": self.step,
-                "reason": "cancelled by the user (or an approval was declined)",
+                # If an approval timed out, say so precisely. "Cancelled" on its
+                # own reads as "you stopped it" and hides the one outcome the
+                # operator most needs to know: the message never went.
+                "reason": self.error or "cancelled by the user (or an approval was declined)",
             }, task_id=self.task_id, step=self.step)
 
         except Exception as exc:  # noqa: BLE001 - a real failure must be reported as one
@@ -911,18 +1298,20 @@ class Registry:
         self._running: Optional[asyncio.Task] = None
         self.active_task_id: Optional[str] = None
 
-    def create(self, command: str, pre_approved: bool = False) -> Task:
-        task = Task(command, pre_approved=pre_approved)
+    def create(self, command: str, pre_approved: bool = False,
+               privacy_mode: str = "balanced") -> Task:
+        task = Task(command, pre_approved=pre_approved, privacy_mode=privacy_mode)
         self.tasks[task.task_id] = task
         return task
 
-    async def start(self, command: str, pre_approved: bool = False) -> Task:
+    async def start(self, command: str, pre_approved: bool = False,
+                    privacy_mode: str = "balanced") -> Task:
         if self._running is not None and not self._running.done():
             raise RuntimeError(
                 "a task is already running (%s). Cancel it before starting another."
                 % self.active_task_id
             )
-        task = self.create(command, pre_approved=pre_approved)
+        task = self.create(command, pre_approved=pre_approved, privacy_mode=privacy_mode)
         self.active_task_id = task.task_id
         self._running = asyncio.create_task(task.run())
         return task
