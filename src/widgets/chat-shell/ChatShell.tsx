@@ -157,6 +157,31 @@ export function ChatShell({
           <Typography.Paragraph>
             Ask naturally. Sensitive fields are masked locally before any reasoning starts.
           </Typography.Paragraph>
+
+          {/*
+            Quick actions, from Gaurav's upstream work.
+            There they called dedicated NETRASHIELD_* extension messages. Here
+            they fill the composer instead: this agent takes plain English and
+            plans the scrolling and reading itself, so a shortcut only needs to
+            say what you want -- and you can edit it before sending, which the
+            fixed buttons could not.
+          */}
+          <div className="quick-actions-list">
+            <button
+              type="button"
+              className="quick-action-pill"
+              onClick={() => onTaskChange('Scroll through the whole page and give a complete summary')}
+            >
+              📜 Full Page Scroll &amp; Summarize
+            </button>
+            <button
+              type="button"
+              className="quick-action-pill"
+              onClick={() => onTaskChange('Scan and redact all sensitive PII on this page')}
+            >
+              🛡️ Scan &amp; Redact Sensitive PII
+            </button>
+          </div>
         </section>
       )}
 
