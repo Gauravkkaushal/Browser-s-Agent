@@ -21,6 +21,8 @@ export function useAgentRunner() {
   const [reason, setReason] = useState<ReasonResult | null>(null)
   const [task, setTask] = useState('')
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages)
+  const [maskedScreenshot, setMaskedScreenshot] = useState<string | null>(null)
+  const [maskedCount, setMaskedCount] = useState<number>(0)
 
   const isRunning = status === 'scanning' || reasonStatus === 'thinking'
   const extensionReady = isExtensionReady()
@@ -43,11 +45,11 @@ export function useAgentRunner() {
     }
 
     if (scan) {
-      return 'Sensitive content is masked. Ask for the next step.'
+      return `Sensitive content is masked (${maskedCount} PII elements). Ask for the next step.`
     }
 
     return ''
-  }, [error, reason, reasonStatus, scan, status])
+  }, [error, maskedCount, reason, reasonStatus, scan, status])
 
   function updateTask(nextTask: string) {
     setTask(nextTask)
@@ -82,12 +84,22 @@ export function useAgentRunner() {
       setScan(scanResponse)
       setStatus('ready')
 
-      await sendToActiveTab({ type: 'NETRASHIELD_APPLY_MASKS', mode })
+      const maskResult = (await sendToActiveTab({ type: 'NETRASHIELD_APPLY_MASKS', mode })) as {
+        ok?: boolean
+        screenshot?: string
+        count?: number
+      } | null
+
+      const screenshot = maskResult?.screenshot || ''
+      const count = maskResult?.count ?? scanResponse.regions?.length ?? 0
+      setMaskedScreenshot(screenshot || null)
+      setMaskedCount(count)
 
       setReasonStatus('thinking')
       const response = await askReasoningServer({
         ...scanResponse.payload,
         task: cleanTask,
+        screenshot: screenshot || undefined,
       })
       setReason(response)
       setReasonStatus('ready')
@@ -123,6 +135,8 @@ export function useAgentRunner() {
     status,
     statusText,
     task,
+    maskedScreenshot,
+    maskedCount,
     runAgent,
     setMode,
     updateTask,

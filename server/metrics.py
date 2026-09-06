@@ -23,12 +23,18 @@ class PrivacyMetricsTracker:
         }
         self.total_latency_ms = 0.0
         self.recent_activities: List[Dict[str, Any]] = []
+        self.latest_masked_screenshot: Optional[str] = None
         self.start_time = time.time()
 
     def record_request(self, payload: Any, latency_ms: float, source: str, command: Any):
         with self._lock:
             self.total_requests += 1
             self.total_latency_ms += latency_ms
+
+            # Capture latest masked screenshot if provided
+            screenshot = getattr(payload, "screenshot", None)
+            if screenshot:
+                self.latest_masked_screenshot = screenshot
 
             # Extract privacy summary and redactions
             redaction_count = 0
@@ -81,6 +87,7 @@ class PrivacyMetricsTracker:
                 "piiBreakdown": {k: v for k, v in self.pii_breakdown.items() if v > 0} or {"Aadhaar": 0, "PAN": 0, "Card": 0},
                 "uptimeSeconds": uptime_sec,
                 "recentActivities": list(self.recent_activities),
+                "latestMaskedScreenshot": self.latest_masked_screenshot,
             }
 
 tracker = PrivacyMetricsTracker()

@@ -60,8 +60,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       lastScan = scanPage(message.mode)
     }
 
-    applyMasks(lastScan.regions)
-    sendResponse({ ok: true })
+    const screenshot = applyMasks(lastScan.regions)
+    sendResponse({ ok: true, screenshot, count: lastScan.regions.length })
     return true
   }
 
@@ -496,8 +496,177 @@ function toServerSafeElement(element, regions) {
   }
 }
 
+function ensureAnimationStyles() {
+  if (document.getElementById('netrashield-anim-styles')) return
+
+  const style = document.createElement('style')
+  style.id = 'netrashield-anim-styles'
+  style.textContent = `
+    @keyframes netrashieldLaserSweep {
+      0% { top: 0%; opacity: 0; }
+      15% { opacity: 1; }
+      85% { opacity: 1; }
+      100% { top: 100%; opacity: 0; }
+    }
+    @keyframes netrashieldPopIn {
+      0% { transform: scale(0.88); opacity: 0; }
+      60% { transform: scale(1.03); opacity: 1; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    @keyframes netrashieldPulseGlow {
+      0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6), inset 0 0 10px rgba(16, 185, 129, 0.2); }
+      70% { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0), inset 0 0 5px rgba(16, 185, 129, 0.05); }
+      100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0), inset 0 0 2px rgba(16, 185, 129, 0.02); }
+    }
+    @keyframes netrashieldHudSlide {
+      0% { transform: translateY(-40px); opacity: 0; }
+      100% { transform: translateY(0); opacity: 1; }
+    }
+    .netrashield-masked-box {
+      animation: netrashieldPopIn 0.32s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards, netrashieldPulseGlow 2.5s infinite ease-out;
+      transition: all 0.2s ease;
+    }
+  `
+  document.head ? document.head.appendChild(style) : document.documentElement.appendChild(style)
+}
+
+function triggerScanLaser() {
+  const existing = document.getElementById('netrashield-scan-laser')
+  if (existing) existing.remove()
+
+  const laser = document.createElement('div')
+  laser.id = 'netrashield-scan-laser'
+  laser.style.cssText = `
+    position: fixed;
+    left: 0;
+    width: 100vw;
+    height: 4px;
+    background: linear-gradient(90deg, transparent, #10b981, #06b6d4, #10b981, transparent);
+    box-shadow: 0 0 20px 6px rgba(16, 185, 129, 0.85), 0 0 40px 12px rgba(6, 182, 212, 0.5);
+    z-index: 2147483647;
+    pointer-events: none;
+    animation: netrashieldLaserSweep 1.2s ease-in-out forwards;
+  `
+  document.documentElement.appendChild(laser)
+  setTimeout(() => laser.remove(), 1300)
+}
+
+function showFloatingHud(count) {
+  let hud = document.getElementById('netrashield-floating-hud')
+  if (!hud) {
+    hud = document.createElement('div')
+    hud.id = 'netrashield-floating-hud'
+    hud.style.cssText = `
+      position: fixed;
+      top: 18px;
+      right: 24px;
+      z-index: 2147483647;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 18px;
+      background: rgba(10, 15, 29, 0.94);
+      border: 1.5px solid #10b981;
+      border-radius: 9999px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 0 16px rgba(16, 185, 129, 0.35);
+      color: #f0fdf4;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      backdrop-filter: blur(12px);
+      pointer-events: none;
+      animation: netrashieldHudSlide 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    `
+    document.documentElement.appendChild(hud)
+  }
+
+  hud.innerHTML = `
+    <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:#10b981; box-shadow:0 0 8px #10b981;"></span>
+    <span>🛡️ NetraShield Active: <span style="color:#34d399;">${count} PII Elements Redacted</span></span>
+  `
+
+  setTimeout(() => {
+    if (hud && hud.parentElement) {
+      hud.style.transition = 'opacity 0.6s ease, transform 0.6s ease'
+      hud.style.opacity = '0'
+      hud.style.transform = 'translateY(-20px)'
+      setTimeout(() => hud.remove(), 600)
+    }
+  }, 4500)
+}
+
+function generateMaskedThumbnail(regions) {
+  try {
+    const canvas = document.createElement('canvas')
+    const width = 480
+    const height = 300
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return ''
+
+    // Background gradient representing the browser canvas
+    const bgGradient = ctx.createLinearGradient(0, 0, width, height)
+    bgGradient.addColorStop(0, '#090d16')
+    bgGradient.addColorStop(1, '#111827')
+    ctx.fillStyle = bgGradient
+    ctx.fillRect(0, 0, width, height)
+
+    // Draw page layout skeleton
+    ctx.fillStyle = 'rgba(148, 163, 184, 0.15)'
+    ctx.fillRect(20, 20, 160, 20)
+    ctx.fillRect(20, 55, width - 40, 10)
+    ctx.fillRect(20, 72, width - 120, 10)
+    ctx.fillRect(20, 89, width - 70, 10)
+
+    const viewW = Math.max(window.innerWidth || 1200, 800)
+    const viewH = Math.max(window.innerHeight || 800, 600)
+    const scaleX = width / viewW
+    const scaleY = height / viewH
+
+    regions.forEach((region) => {
+      const [rx, ry, rw, rh] = region.box
+      const sx = Math.max(10, Math.min(width - 40, (rx - window.scrollX) * scaleX))
+      const sy = Math.max(10, Math.min(height - 40, (ry - window.scrollY) * scaleY))
+      const sw = Math.max(50, Math.min(width - sx - 10, rw * scaleX))
+      const sh = Math.max(20, Math.min(50, rh * scaleY))
+
+      ctx.fillStyle = 'rgba(6, 78, 59, 0.88)'
+      ctx.strokeStyle = '#10b981'
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      if (ctx.roundRect) {
+        ctx.roundRect(sx, sy, sw, sh, 4)
+      } else {
+        ctx.rect(sx, sy, sw, sh)
+      }
+      ctx.fill()
+      ctx.stroke()
+
+      ctx.fillStyle = '#6ee7b7'
+      ctx.font = 'bold 9px sans-serif'
+      ctx.fillText(`🛡️ ${region.type || 'PII'}`, sx + 4, sy + Math.min(sh - 4, 13))
+    })
+
+    // Status bar at bottom
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.92)'
+    ctx.fillRect(0, height - 26, width, 26)
+    ctx.fillStyle = '#34d399'
+    ctx.font = 'bold 11px sans-serif'
+    ctx.fillText(`🛡️ NetraShield On-Device Masking • ${regions.length} PII Items Redacted`, 14, height - 9)
+
+    return canvas.toDataURL('image/png')
+  } catch (err) {
+    console.warn('[NetraShield] Failed to generate thumbnail canvas:', err)
+    return ''
+  }
+}
+
 function applyMasks(regions) {
   clearMasks()
+  ensureAnimationStyles()
+  triggerScanLaser()
+  showFloatingHud(regions.length)
 
   const layer = document.createElement('div')
   layer.id = NETRASHIELD_MASK_LAYER
@@ -506,28 +675,59 @@ function applyMasks(regions) {
   layer.style.zIndex = '2147483646'
   layer.style.pointerEvents = 'none'
 
-  regions.forEach((region) => {
+  regions.forEach((region, index) => {
     const [x, y, width, height] = region.box
     const mask = document.createElement('div')
-    mask.title = `NetraShield masked ${region.type}`
+    mask.className = 'netrashield-masked-box'
+    mask.title = `NetraShield Protected: ${region.type}`
     mask.style.position = 'absolute'
     mask.style.left = `${x}px`
     mask.style.top = `${y}px`
     mask.style.width = `${Math.max(width, 12)}px`
     mask.style.height = `${Math.max(height, 12)}px`
-    mask.style.borderRadius = '4px'
-    mask.style.background = 'rgba(8, 14, 18, 0.94)'
-    mask.style.outline = '2px solid rgba(15, 118, 110, 0.9)'
+    mask.style.borderRadius = '5px'
+    mask.style.background = 'rgba(8, 14, 22, 0.94)'
+    mask.style.border = '1.5px solid rgba(16, 185, 129, 0.85)'
     mask.style.backdropFilter = 'blur(8px)'
+    mask.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.45)'
+    mask.style.animationDelay = `${index * 45}ms`
+    mask.style.display = 'flex'
+    mask.style.alignItems = 'center'
+    mask.style.justifyContent = 'flex-start'
+    mask.style.overflow = 'hidden'
+    mask.style.padding = '0 4px'
+
+    const badge = document.createElement('span')
+    badge.style.cssText = `
+      font-size: 10px;
+      font-weight: 700;
+      color: #34d399;
+      background: rgba(6, 78, 59, 0.8);
+      padding: 1px 5px;
+      border-radius: 3px;
+      border: 1px solid rgba(52, 211, 153, 0.4);
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      pointer-events: none;
+      letter-spacing: 0.3px;
+    `
+    badge.textContent = `🔒 ${region.type.toUpperCase()}`
+    mask.appendChild(badge)
+
     layer.appendChild(mask)
   })
 
   document.documentElement.appendChild(layer)
+  return generateMaskedThumbnail(regions)
 }
 
 function clearMasks() {
   document.getElementById(NETRASHIELD_MASK_LAYER)?.remove()
   document.getElementById(NETRASHIELD_HIGHLIGHT)?.remove()
+  document.getElementById('netrashield-scan-laser')?.remove()
+  document.getElementById('netrashield-floating-hud')?.remove()
 }
 
 function executeCommand(command, elements) {

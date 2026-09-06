@@ -15,6 +15,8 @@ type ChatShellProps = {
   mode: PrivacyMode
   statusText: string
   task: string
+  maskedScreenshot?: string | null
+  maskedCount?: number
   onModeChange: (mode: PrivacyMode) => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
   onTaskChange: (task: string) => void
@@ -27,6 +29,8 @@ export function ChatShell({
   mode,
   statusText,
   task,
+  maskedScreenshot,
+  maskedCount = 0,
   onModeChange,
   onSubmit,
   onTaskChange,
@@ -91,6 +95,21 @@ export function ChatShell({
             </article>
           ))}
           {isRunning && <article className="message assistant pending">{statusText}</article>}
+          {maskedScreenshot && (
+            <div className="masked-proof-card" role="region" aria-label="Masked Snapshot Proof">
+              <div className="masked-proof-header">
+                <div className="masked-proof-badge">
+                  <span className="masked-proof-dot" />
+                  <span>🛡️ On-Device Redaction</span>
+                </div>
+                <span className="masked-proof-count">{maskedCount} PII Masked</span>
+              </div>
+              <div className="masked-proof-img-wrap">
+                <img src={maskedScreenshot} alt="Visual Redaction Proof" className="masked-proof-img" />
+                <div className="masked-proof-tag">Visual Masking Proof</div>
+              </div>
+            </div>
+          )}
         </section>
       )}
 

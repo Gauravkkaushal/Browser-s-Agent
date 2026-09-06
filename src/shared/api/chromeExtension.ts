@@ -22,7 +22,7 @@ type ChromeApi = {
     sendMessage: (
       tabId: number,
       message: TabMessage,
-      callback: (response?: ScanResult | { ok: boolean; count?: number; url?: string; title?: string }) => void,
+      callback: (response?: ScanResult | { ok: boolean; count?: number; url?: string; title?: string; screenshot?: string }) => void,
     ) => void
   }
 }
@@ -40,7 +40,7 @@ export async function sendToActiveTab(message: TabMessage) {
     throw new Error('Build the app and load the dist folder as an unpacked Chrome extension.')
   }
 
-  return new Promise<ScanResult | { ok: boolean; count?: number; url?: string; title?: string }>((resolve, reject) => {
+  return new Promise<ScanResult | { ok: boolean; count?: number; url?: string; title?: string; screenshot?: string }>((resolve, reject) => {
     chromeApi.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tabId = tabs[0]?.id
 
