@@ -68,7 +68,6 @@ export async function sendToActiveTab(message: TabMessage) {
   })
 }
 
-import { runOnnxInference } from '../lib/onnxInference'
 import { loadSettings } from '../lib/settingsStorage'
 
 export async function askReasoningServer(payload: AgentRequestPayload): Promise<ReasonResult> {
@@ -82,6 +81,7 @@ export async function askReasoningServer(payload: AgentRequestPayload): Promise<
         if (runtimeError || !response) {
           console.warn('[NetraShield] Extension message error, attempting direct ONNX inference:', runtimeError)
           try {
+            const { runOnnxInference } = await import('../lib/onnxInference')
             const onnxResult = await runOnnxInference(payload.task, payload)
             if (onnxResult) {
               resolve(onnxResult)
@@ -138,6 +138,7 @@ export async function askReasoningServer(payload: AgentRequestPayload): Promise<
   }
 
   try {
+    const { runOnnxInference } = await import('../lib/onnxInference')
     const onnxResult = await runOnnxInference(payload.task, payload)
     if (onnxResult) {
       return onnxResult

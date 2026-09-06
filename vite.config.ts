@@ -21,14 +21,12 @@ export default defineConfig({
     viteStaticCopy({
       targets: [
         {
-          src: 'node_modules/onnxruntime-web/dist/*.wasm',
+          src: [
+            'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.wasm',
+            'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.mjs',
+            'node_modules/onnxruntime-web/dist/ort.all.bundle.min.mjs',
+          ],
           dest: 'onnx',
-          rename: { stripBase: true },
-        },
-        {
-          src: 'node_modules/onnxruntime-web/dist/*.mjs',
-          dest: 'onnx',
-          rename: { stripBase: true },
         },
       ],
     }),

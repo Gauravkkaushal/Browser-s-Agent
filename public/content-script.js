@@ -460,7 +460,34 @@ function buildLocalVisualSummary(elements, regions) {
   }
 }
 
+function collectSanitizedPageText() {
+  const headings = Array.from(document.querySelectorAll('h1, h2, h3'))
+    .filter(isVisible)
+    .map((el) => normalizeText(el.innerText || el.textContent || ''))
+    .filter(Boolean)
+    .slice(0, 10)
+
+  const paragraphs = Array.from(
+    document.querySelectorAll('main p, article p, [role="main"] p, p, li, [class*="desc"], [class*="content"], [class*="snippet"]')
+  )
+    .filter(isVisible)
+    .map((el) => normalizeText(el.innerText || el.textContent || ''))
+    .filter((text) => text.length > 15 && text.length < 600)
+    .slice(0, 20)
+
+  let combined = ''
+  if (headings.length > 0) {
+    combined += `Headings: ${headings.join(' | ')}\n`
+  }
+  if (paragraphs.length > 0) {
+    combined += `Key Content: ${paragraphs.join(' ')}\n`
+  }
+
+  return sanitizeText(combined).slice(0, 3500)
+}
+
 function buildSanitizedPayload(elements, regions, visualSummary, mode) {
+  const pageText = collectSanitizedPageText()
   return {
     schemaVersion: 'netrashield.sanitized.v1',
     mode,
@@ -473,6 +500,7 @@ function buildSanitizedPayload(elements, regions, visualSummary, mode) {
       redactionTypes: summarizeRedactionTypes(regions),
       coverage: visualSummary.redactionCoverage,
     },
+    pageText,
     visualSummary,
     redactions: regions.map((region) => ({
       id: region.id,

@@ -46,6 +46,7 @@ export type SanitizedPayload = {
     confidence: number
     box: [number, number, number, number]
   }>
+  pageText?: string
   visualSummary: {
     visualDensity: string
     model: string
@@ -61,6 +62,7 @@ export type SanitizedPayload = {
 export type AgentRequestPayload = SanitizedPayload & {
   task: string
   screenshot?: string
+  pageText?: string
 }
 
 export type ScanResult = {

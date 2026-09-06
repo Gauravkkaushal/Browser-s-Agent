@@ -15,20 +15,26 @@ from .config import (
 )
 
 SYSTEM_PROMPT = """You are NetraShield Autonomous Browser Agent (ISRO SIH 26171).
-Your purpose is to inspect the user's current web page graph and task, and determine the safest, most accurate next interaction target.
+Your purpose is to inspect the user's sanitized web page context and task, and either provide a comprehensive page summary / answer, or determine the safest interaction target.
 
 PRIVACY GUARANTEE:
 All sensitive raw values, passwords, financial details, and Indian identity numbers (Aadhaar, PAN, Voter ID, Driving License, GSTIN) have ALREADY been masked locally on-device by NetraShield's content scanner. You only see sanitized labels (e.g. '[REDACTED_AADHAAR]', '[PROTECTED INPUT]').
 
-TASK:
-Analyze the provided sanitized interactive elements and the user's intent. Select the single best element to interact with.
+TASK TYPES:
+1. SUMMARY / QUESTION / ANALYSIS (e.g. 'summarize this page', 'what is this site', 'explain content'):
+   - Set "type": "none", "targetId": "".
+   - In "instruction", provide a clear, well-structured, multi-bullet summary or answer based on the sanitized page title, headings, content, and interactive components.
+   - In "rationale", explain the privacy-safe context used.
+2. ACTION / INTERACTION (e.g. 'click checkout', 'fill username', 'search shoes'):
+   - Select the single best element from the elements list.
+   - Set "type": "highlight", "targetId": "<element id>", and describe the action in "instruction".
 
 OUTPUT FORMAT:
 Return strictly valid JSON with this schema:
 {
   "type": "highlight" | "none",
-  "targetId": "<element id from input>",
-  "instruction": "<short, actionable description of why this element is targeted for user confirmation>",
+  "targetId": "<element id or empty>",
+  "instruction": "<response or action instruction>",
   "rationale": "<brief privacy-preserving reasoning explanation>"
 }
 """
@@ -70,6 +76,7 @@ async def _call_openai_compatible(payload: AgentRequestPayload) -> ReasonRespons
         "task": payload.task,
         "pageOrigin": payload.page.origin if payload.page else "unknown",
         "pageTitle": payload.page.titleHint if payload.page else "unknown",
+        "pageText": payload.pageText or "",
         "elements": elements_summary,
     }, indent=2)
 
@@ -82,7 +89,7 @@ async def _call_openai_compatible(payload: AgentRequestPayload) -> ReasonRespons
         "model": OPENAI_MODEL,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Decide the next action for:\n{user_content}"},
+            {"role": "user", "content": f"Decide the next action or summary for:\n{user_content}"},
         ],
         "response_format": {"type": "json_object"},
         "temperature": 0.2,
@@ -99,11 +106,11 @@ async def _call_openai_compatible(payload: AgentRequestPayload) -> ReasonRespons
             ok=True,
             source="llm-openai",
             command=AgentCommand(
-                type=parsed.get("type", "highlight"),
+                type=parsed.get("type", "none" if "summar" in payload.task.lower() else "highlight"),
                 targetId=parsed.get("targetId", ""),
-                instruction=parsed.get("instruction", f"Highlight element for task: {payload.task}"),
+                instruction=parsed.get("instruction", f"Response for: {payload.task}"),
             ),
-            rationale=parsed.get("rationale", "LLM determined safest next step on sanitized graph."),
+            rationale=parsed.get("rationale", "LLM determined response on sanitized graph."),
         )
 
 async def _call_gemini(payload: AgentRequestPayload) -> ReasonResponse:
@@ -111,7 +118,13 @@ async def _call_gemini(payload: AgentRequestPayload) -> ReasonResponse:
         {"id": el.id, "role": el.role, "label": el.label, "masked": el.masked}
         for el in payload.elements[:35]
     ]
-    prompt_text = f"{SYSTEM_PROMPT}\n\nUser Task: {payload.task}\nPage Graph: {json.dumps(elements_summary)}"
+    context_data = {
+        "task": payload.task,
+        "pageTitle": payload.page.titleHint if payload.page else "unknown",
+        "pageText": payload.pageText or "",
+        "elements": elements_summary,
+    }
+    prompt_text = f"{SYSTEM_PROMPT}\n\nContext Data:\n{json.dumps(context_data, indent=2)}"
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     body = {
@@ -130,9 +143,9 @@ async def _call_gemini(payload: AgentRequestPayload) -> ReasonResponse:
             ok=True,
             source="llm-gemini",
             command=AgentCommand(
-                type=parsed.get("type", "highlight"),
+                type=parsed.get("type", "none" if "summar" in payload.task.lower() else "highlight"),
                 targetId=parsed.get("targetId", ""),
-                instruction=parsed.get("instruction", f"Target selected by Gemini for: {payload.task}"),
+                instruction=parsed.get("instruction", f"Response from Gemini for: {payload.task}"),
             ),
             rationale=parsed.get("rationale", "Gemini evaluated sanitized page representation."),
         )
@@ -142,7 +155,13 @@ async def _call_ollama(payload: AgentRequestPayload) -> ReasonResponse:
         {"id": el.id, "role": el.role, "label": el.label}
         for el in payload.elements[:30]
     ]
-    prompt = f"{SYSTEM_PROMPT}\nTask: {payload.task}\nElements: {json.dumps(elements_summary)}\nReturn JSON only:"
+    context_data = {
+        "task": payload.task,
+        "pageTitle": payload.page.titleHint if payload.page else "unknown",
+        "pageText": payload.pageText or "",
+        "elements": elements_summary,
+    }
+    prompt = f"{SYSTEM_PROMPT}\nContext:\n{json.dumps(context_data, indent=2)}\nReturn JSON only:"
 
     url = f"{OLLAMA_HOST.rstrip('/')}/api/generate"
     body = {
@@ -162,17 +181,59 @@ async def _call_ollama(payload: AgentRequestPayload) -> ReasonResponse:
             ok=True,
             source="llm-ollama",
             command=AgentCommand(
-                type=parsed.get("type", "highlight"),
+                type=parsed.get("type", "none" if "summar" in payload.task.lower() else "highlight"),
                 targetId=parsed.get("targetId", ""),
-                instruction=parsed.get("instruction", f"Ollama local LLM targeting {parsed.get('targetId')}"),
+                instruction=parsed.get("instruction", f"Ollama response for: {payload.task}"),
             ),
             rationale=parsed.get("rationale", "Processed by local Ollama instance."),
         )
 
 def _rule_based_reasoning(payload: AgentRequestPayload) -> ReasonResponse:
-    """Smart Semantic Rule-Based Reasoning Planner for zero-leak instant execution."""
+    """Smart Semantic Rule-Based Reasoning Planner for zero-leak instant execution and summarization."""
     task = (payload.task or "").lower()
     elements = payload.elements or []
+
+    # Check if user wants a summary / page overview / info
+    summary_pattern = re.compile(r"summar(y|ise|ize)|what is|tell me|explain|overview|about|read|who is|detail", re.I)
+    if summary_pattern.search(task):
+        title = payload.page.titleHint if payload.page else "Current Web Page"
+        origin = payload.page.origin if payload.page else ""
+        page_text = (payload.pageText or "").strip()
+
+        summary_lines = [f"📄 **Page Summary:** {title}"]
+        if origin and origin != "about:blank":
+            summary_lines.append(f"🌐 **Site:** {origin}")
+
+        if page_text:
+            content_snippets = [s.strip() for s in page_text.split("\n") if s.strip()]
+            summary_lines.append("\n**Key Insights (Sanitized):**")
+            for snippet in content_snippets[:4]:
+                summary_lines.append(f"• {snippet}")
+        else:
+            interactive_roles = {}
+            for el in elements:
+                interactive_roles[el.role] = interactive_roles.get(el.role, 0) + 1
+            roles_desc = ", ".join(f"{count} {role}s" for role, count in interactive_roles.items())
+            summary_lines.append(f"• Interactive Structure: Contains {roles_desc or 'standard web elements'}.")
+
+        pii_count = (
+            payload.privacySummary.regionCount
+            if payload.privacySummary
+            else len(payload.redactions)
+        )
+        summary_lines.append(f"\n🛡️ *NetraShield Zero-Leak: {pii_count} sensitive fields protected on-device.*")
+        summary_text = "\n".join(summary_lines)
+
+        return ReasonResponse(
+            ok=True,
+            source="server-rule-engine",
+            command=AgentCommand(
+                type="none",
+                targetId="",
+                instruction=summary_text,
+            ),
+            rationale="Identified informational/summary intent. Provided structured overview with zero raw PII exposure.",
+        )
 
     # Intent keyword matching matching our 8 classes
     intent_patterns = {

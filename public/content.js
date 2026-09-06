@@ -208,6 +208,19 @@
     const totalMs = Math.round(performance.now() - startTime)
     const redactionMs = Math.round(performance.now() - redactionStart)
 
+    const headings = Array.from(document.querySelectorAll('h1, h2, h3'))
+      .map((el) => (el.innerText || el.textContent || '').trim())
+      .filter(Boolean)
+      .slice(0, 8)
+    const paragraphs = Array.from(document.querySelectorAll('main p, article p, p, li, [class*="content"]'))
+      .map((el) => (el.innerText || el.textContent || '').trim())
+      .filter((t) => t.length > 15 && t.length < 500)
+      .slice(0, 15)
+    let extractedText = ''
+    if (headings.length > 0) extractedText += `Headings: ${headings.join(' | ')}\n`
+    if (paragraphs.length > 0) extractedText += `Key Content: ${paragraphs.join(' ')}\n`
+    const { sanitized: pageText } = sanitizeText(extractedText.slice(0, 3000))
+
     const payload = {
       schemaVersion: '1.0.0',
       mode: privacyMode,
@@ -220,6 +233,7 @@
         redactionTypes: redactionCounts,
         coverage: regions.length > 0 ? 1 : 0,
       },
+      pageText,
       elements: elements.slice(0, 40),
       redactions: regions.map((r) => ({
         id: r.id,
