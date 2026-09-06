@@ -1,15 +1,16 @@
 {
-  "name": "sih",
+  "name": "browser-agent",
   "private": true,
-  "version": "0.0.0",
+  "version": "2.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "server": "uvicorn server.main:app --port 8787 --reload",
-    "server:node": "node server/demo-server.mjs",
-    "build:model": "node scripts/build-onnx-model.mjs",
+    "server": "uvicorn server.main:app --host 127.0.0.1 --port 8787",
     "build": "tsc -b && vite build",
     "test": "vitest run",
+    "test:py": "python -m pytest server/tests -q",
+    "smoke": "python -m server.eval.run_smoke",
+    "gates": "python scripts/check_gates.py",
     "generate:icons": "node scripts/generate-icons.mjs",
     "lint": "eslint .",
     "preview": "vite preview"
@@ -23,6 +24,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.30.1",
+    "@types/node": "^26.4.1",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",

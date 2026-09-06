@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Customer record - PII redaction fixture</title>
+<style>
+  body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; padding:40px; background:#fafbfc; color:#111; }
+  .card { max-width:560px; background:#fff; border:1px solid #e3e6ea; border-radius:10px; padding:24px 28px; }
+  h1 { font-size:19px; margin:0 0 18px; }
+  dt { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:#778; margin-top:14px; }
+  dd { margin:3px 0 0; font-size:15px; font-family:ui-monospace, Menlo, Consolas, monospace; }
+  label { display:block; font-size:12px; color:#556; margin:16px 0 5px; font-weight:600; }
+  input { width:100%; padding:9px 11px; border:1px solid #d5dae0; border-radius:6px; box-sizing:border-box; }
+  .note { margin-top:22px; font-size:12px; color:#667; line-height:1.5; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Customer record</h1>
+    <dl>
+      <dt>Email</dt><dd>test@a.com</dd>
+      <dt>Card on file</dt><dd>4111 1111 1111 1111</dd>
+      <dt>Phone</dt><dd>+91 9876543210</dd>
+      <dt>PAN</dt><dd>ABCDE1234F</dd>
+      <dt>Aadhaar</dt><dd>4321 8765 2109</dd>
+      <dt>UPI</dt><dd>customer@okhdfcbank</dd>
+      <dt>Order total</dt><dd>&#8377;1,799</dd>
+    </dl>
+
+    <label for="pw">Account password</label>
+    <input id="pw" name="password" type="password" value="hunter2placeholder">
+
+    <label for="otp">One-time code</label>
+    <input id="otp" name="otp" value="778211">
+
+    <p class="note">
+      Every value above should reach the server as [REDACTED:TYPE]. The two field
+      values below the line should arrive only as "[PROTECTED INPUT] len=N".
+      The order total is deliberately NOT redacted &mdash; prices are task data.
+    </p>
+  </div>
+</body>
+</html>
