@@ -26,5 +26,3 @@ __pycache__
 *.sln
 *.sw?
 doc
-# scratch commit-message drafts
-msg.txt
