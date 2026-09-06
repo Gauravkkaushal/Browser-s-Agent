@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "NetraShield - Privacy-Preserving Autonomous Browser Agent",
-  "description": "On-device privacy scanner and local ONNX ML intent reasoning agent for safe web interactions (ISRO SIH 26171).",
-  "version": "1.0.0",
+  "minimum_chrome_version": "116",
+  "name": "Browser Agent - Real Computer-Use Agent",
+  "description": "Closed-loop observe/reason/act/verify browser agent running inside your own Chrome profile.",
+  "version": "2.0.0",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -17,23 +18,32 @@
       "128": "icons/icon-128.png"
     },
     "default_popup": "index.html",
-    "default_title": "NetraShield Agent"
+    "default_title": "Browser Agent"
   },
   "background": {
-    "service_worker": "background.js",
+    "service_worker": "agent-background.js",
     "type": "module"
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content-script.js"],
-      "run_at": "document_idle"
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "agent-content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
     }
   ],
   "permissions": [
     "activeTab",
+    "tabs",
     "scripting",
-    "storage"
+    "storage",
+    "webNavigation",
+    "notifications",
+    "debugger"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -41,10 +51,11 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "models/*",
-        "onnx/*"
+        "agent-content.js"
       ],
-      "matches": ["<all_urls>"]
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }
