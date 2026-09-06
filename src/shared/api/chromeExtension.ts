@@ -6,7 +6,7 @@ type ChromeTab = {
 
 type TabMessage =
   | { type: 'NETRASHIELD_DOM_ENQUIRY'; task?: string }
-  | { type: 'NETRASHIELD_SCAN' | 'NETRASHIELD_APPLY_MASKS' | 'NETRASHIELD_CLEAR_MASKS'; mode?: PrivacyMode }
+  | { type: 'NETRASHIELD_SCAN' | 'NETRASHIELD_APPLY_MASKS' | 'NETRASHIELD_CLEAR_MASKS' | 'NETRASHIELD_AUTO_SCROLL_SCAN'; mode?: PrivacyMode }
   | { type: 'NETRASHIELD_EXECUTE_COMMAND'; mode?: PrivacyMode; command: AgentCommand }
 
 type ChromeApi = {

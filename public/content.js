@@ -418,6 +418,7 @@
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       try {
         switch (message.type) {
+          case 'NETRASHIELD_AUTO_SCROLL_SCAN':
           case 'NETRASHIELD_SCAN': {
             const scanData = scanDOM(message.mode)
             sendResponse(scanData)

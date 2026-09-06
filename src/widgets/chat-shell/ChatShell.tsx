@@ -84,6 +84,27 @@ export function ChatShell({
           <Typography.Paragraph>
             Ask naturally. Sensitive fields are masked locally before any reasoning starts.
           </Typography.Paragraph>
+
+          <div className="quick-actions-list">
+            <button
+              type="button"
+              className="quick-action-pill"
+              onClick={() => {
+                onTaskChange('Scroll through the whole page and give a complete summary')
+              }}
+            >
+              📜 Full Page Scroll & Summarize
+            </button>
+            <button
+              type="button"
+              className="quick-action-pill"
+              onClick={() => {
+                onTaskChange('Scan and redact all sensitive PII on this page')
+              }}
+            >
+              🛡️ Scan & Redact Sensitive PII
+            </button>
+          </div>
         </section>
       )}
 

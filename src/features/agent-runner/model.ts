@@ -76,22 +76,33 @@ export function useAgentRunner() {
     setReason(null)
     setTask('')
 
+    const isScrollOrSummary = /scroll|full page|whole page|entire page|summar(y|ise|ize)|overview/i.test(cleanTask)
+
     try {
       const domEnquiry = await sendToActiveTab({ type: 'NETRASHIELD_DOM_ENQUIRY', task: cleanTask })
       console.log('[NetraShield Popup] DOM enquiry completed for task:', cleanTask, domEnquiry)
 
-      const scanResponse = (await sendToActiveTab({ type: 'NETRASHIELD_SCAN', mode })) as ScanResult
+      let scanResponse: ScanResult & { screenshot?: string; count?: number }
+      let screenshot = ''
+      let count = 0
+
+      if (isScrollOrSummary) {
+        scanResponse = (await sendToActiveTab({ type: 'NETRASHIELD_AUTO_SCROLL_SCAN', mode })) as any
+        screenshot = scanResponse?.screenshot || ''
+        count = scanResponse?.count ?? scanResponse?.regions?.length ?? 0
+      } else {
+        scanResponse = (await sendToActiveTab({ type: 'NETRASHIELD_SCAN', mode })) as ScanResult
+        const maskResult = (await sendToActiveTab({ type: 'NETRASHIELD_APPLY_MASKS', mode })) as {
+          ok?: boolean
+          screenshot?: string
+          count?: number
+        } | null
+        screenshot = maskResult?.screenshot || ''
+        count = maskResult?.count ?? scanResponse.regions?.length ?? 0
+      }
+
       setScan(scanResponse)
       setStatus('ready')
-
-      const maskResult = (await sendToActiveTab({ type: 'NETRASHIELD_APPLY_MASKS', mode })) as {
-        ok?: boolean
-        screenshot?: string
-        count?: number
-      } | null
-
-      const screenshot = maskResult?.screenshot || ''
-      const count = maskResult?.count ?? scanResponse.regions?.length ?? 0
       setMaskedScreenshot(screenshot || null)
       setMaskedCount(count)
 

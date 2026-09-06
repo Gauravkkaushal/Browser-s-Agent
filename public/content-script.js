@@ -49,6 +49,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true
   }
 
+  if (message.type === 'NETRASHIELD_AUTO_SCROLL_SCAN') {
+    autoScrollAndScanPage(message.mode)
+      .then((result) => {
+        sendResponse(result)
+      })
+      .catch((err) => {
+        console.error('[NetraShield] Auto scroll scan error:', err)
+        const fallback = scanPage(message.mode)
+        const screenshot = applyMasks(fallback.regions)
+        sendResponse({ ...fallback, screenshot, count: fallback.regions.length })
+      })
+    return true
+  }
+
   if (message.type === 'NETRASHIELD_SCAN') {
     lastScan = scanPage(message.mode)
     sendResponse(lastScan)
@@ -621,6 +635,121 @@ function showFloatingHud(count) {
       setTimeout(() => hud.remove(), 600)
     }
   }, 4500)
+}
+
+function showScrollingHud(percent, count) {
+  let hud = document.getElementById('netrashield-floating-hud')
+  if (!hud) {
+    hud = document.createElement('div')
+    hud.id = 'netrashield-floating-hud'
+    hud.style.cssText = `
+      position: fixed;
+      top: 18px;
+      right: 24px;
+      z-index: 2147483647;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 10px 18px;
+      background: rgba(10, 15, 29, 0.94);
+      border: 1.5px solid #10b981;
+      border-radius: 14px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 0 16px rgba(16, 185, 129, 0.35);
+      color: #f0fdf4;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      backdrop-filter: blur(12px);
+      pointer-events: none;
+      animation: netrashieldHudSlide 0.3s ease forwards;
+    `
+    document.documentElement.appendChild(hud)
+  }
+
+  hud.innerHTML = `
+    <div style="display:flex; align-items:center; gap:8px;">
+      <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:#10b981; box-shadow:0 0 8px #10b981;"></span>
+      <span>📜 Auto-Scanning Page: <span style="color:#34d399;">${percent}%</span> • <span style="color:#6ee7b7;">${count} PII Found</span></span>
+    </div>
+    <div style="width:100%; height:4px; background:rgba(255,255,255,0.15); border-radius:2px; overflow:hidden;">
+      <div style="width:${percent}%; height:100%; background:#10b981; transition:width 0.2s ease;"></div>
+    </div>
+  `
+
+  if (percent >= 100) {
+    setTimeout(() => {
+      if (hud && hud.parentElement) {
+        hud.style.transition = 'opacity 0.6s ease, transform 0.6s ease'
+        hud.style.opacity = '0'
+        hud.style.transform = 'translateY(-20px)'
+        setTimeout(() => hud.remove(), 600)
+      }
+    }, 3500)
+  }
+}
+
+async function autoScrollAndScanPage(mode = 'balanced') {
+  ensureAnimationStyles()
+  const initialScrollY = window.scrollY
+  const totalHeight = Math.max(
+    document.body.scrollHeight || 0,
+    document.documentElement.scrollHeight || 0,
+    window.innerHeight || 800
+  )
+  const viewportH = window.innerHeight || 800
+  const step = Math.max(350, Math.floor(viewportH * 0.65))
+  const maxScroll = Math.max(0, totalHeight - viewportH)
+  const numSteps = Math.min(10, Math.max(1, Math.ceil(maxScroll / step)))
+
+  const accumulatedRegions = []
+
+  for (let i = 0; i <= numSteps; i++) {
+    const currentY = Math.min(maxScroll, i * step)
+    window.scrollTo({ top: currentY, behavior: 'smooth' })
+    triggerScanLaser()
+
+    await new Promise((resolve) => setTimeout(resolve, 200))
+
+    const rawElements = collectPageElements()
+    const sliceRegions = collectSensitiveRegions(rawElements, mode)
+    sliceRegions.forEach((r) => {
+      if (!accumulatedRegions.some((existing) => overlaps(existing.box, r.box))) {
+        accumulatedRegions.push(r)
+      }
+    })
+
+    const progress = Math.min(100, Math.round(((i + 1) / (numSteps + 1)) * 100))
+    showScrollingHud(progress, accumulatedRegions.length)
+
+    if (currentY >= maxScroll) break
+  }
+
+  // Smooth return to top
+  window.scrollTo({ top: initialScrollY, behavior: 'smooth' })
+  await new Promise((resolve) => setTimeout(resolve, 250))
+
+  const finalScan = scanPage(mode)
+  accumulatedRegions.forEach((r) => {
+    if (!finalScan.regions.some((existing) => overlaps(existing.box, r.box))) {
+      finalScan.regions.push(r)
+    }
+  })
+
+  const screenshot = applyMasks(finalScan.regions)
+  finalScan.payload.privacySummary.regionCount = finalScan.regions.length
+  finalScan.payload.redactions = finalScan.regions.map((region) => ({
+    id: region.id,
+    type: region.type,
+    confidence: region.confidence,
+    box: region.box,
+  }))
+
+  lastScan = finalScan
+  return {
+    ...finalScan,
+    screenshot,
+    count: finalScan.regions.length,
+  }
 }
 
 function generateMaskedThumbnail(regions) {
