@@ -14,9 +14,25 @@ export function PopupPage() {
       task={agent.task}
       maskedScreenshot={agent.maskedScreenshot}
       maskedCount={agent.maskedCount}
+      pageLine={agent.pageLine}
+      hasPage={agent.hasPage}
+      masking={agent.masking}
+      blocked={agent.blocked}
+      history={agent.history}
+      pending={agent.pending}
+      preApprove={agent.preApprove}
+      onPreApproveChange={agent.setPreApprove}
+      onApprove={agent.approve}
+      onApproveAll={agent.approveAll}
+      onDeny={agent.deny}
+      onCancel={agent.cancel}
+      onNewChat={agent.startNewChat}
+      onDetach={agent.detach}
+      isDetached={agent.isDetached}
       onModeChange={agent.setMode}
       onSubmit={agent.runAgent}
       onTaskChange={agent.updateTask}
+      localModelStatus={agent.localModelStatus}
     />
   )
 }

@@ -1,1 +1,1 @@
-# NetraShield FastAPI Server Package
+"""Browser Agent server package."""

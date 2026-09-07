@@ -1,0 +1,65 @@
+[
+  {
+    "id": "nav-and-click",
+    "command": "Open example.com and click the More information link",
+    "task_id": "task_3e7e3e139e",
+    "outcome": "COMPLETED",
+    "passed": true,
+    "summary": "Successfully opened example.com and navigated to the More information page (IANA Example Domains guide).",
+    "error": "",
+    "elapsed_s": 9.0,
+    "checks": [
+      {
+        "check": "url_reached",
+        "ok": true,
+        "detail": "iana.org in 2 observed url transitions"
+      },
+      {
+        "check": "within_step_budget",
+        "ok": true,
+        "detail": "2 steps, budget 8"
+      },
+      {
+        "check": "terminal_state",
+        "ok": true,
+        "detail": "task ended COMPLETED"
+      }
+    ],
+    "metrics": {
+      "steps": 2,
+      "actions_proposed": 2,
+      "actions_executed": 2,
+      "actions_failed": 0,
+      "action_success_rate": "100% (2/2)",
+      "verifications_passed": 1,
+      "verifications_failed": 0,
+      "verification_rate": "100% (1/1)",
+      "grounding_failures": 0,
+      "recoveries_started": 0,
+      "recoveries_handled": 0,
+      "model_calls": 3,
+      "model_latency_ms_avg": 2155.1,
+      "human_interventions": 0,
+      "policy_confirmations": 0,
+      "login_waits": 0
+    },
+    "url_transitions": [
+      {
+        "ts": "2026-09-06T07:11:20.695932+00:00",
+        "step": 0,
+        "url": "https://example.com/",
+        "title": "Example Domain",
+        "interactive_count": 1,
+        "element_count": 30
+      },
+      {
+        "ts": "2026-09-06T07:11:24.009389+00:00",
+        "step": 1,
+        "url": "https://www.iana.org/help/example-domains",
+        "title": "Example Domains",
+        "interactive_count": 31,
+        "element_count": 128
+      }
+    ]
+  }
+]

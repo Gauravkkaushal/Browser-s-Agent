@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Assignment upload - fixture</title>
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;padding:40px;background:#f6f7f9;color:#111}
+.card{max-width:520px;background:#fff;border:1px solid #e3e6ea;border-radius:10px;padding:26px 30px}
+h1{font-size:19px;margin:0 0 6px}.sub{color:#667;font-size:13px;margin-bottom:20px}
+label{display:block;font-size:12px;color:#556;margin:16px 0 6px;font-weight:600}
+input[type=file]{display:block;width:100%;padding:9px;border:1px dashed #b9c1ca;border-radius:7px;background:#fbfcfd}
+input[type=text]{width:100%;padding:9px 11px;border:1px solid #d5dae0;border-radius:6px;box-sizing:border-box}
+button{margin-top:20px;width:100%;padding:12px;border:0;border-radius:8px;background:#0f766e;color:#fff;font-size:15px;font-weight:600;cursor:pointer}
+#out{margin-top:18px;padding:12px;border-radius:7px;background:#eef6f3;border:1px solid #a9d6c8;font-size:13px;display:none}
+</style></head>
+<body><div class="card">
+  <h1>Submit assignment</h1>
+  <div class="sub">Fixture for the file-upload path. Nothing leaves this machine.</div>
+  <label for="title">Submission title</label>
+  <input id="title" type="text" name="title" placeholder="Week 5 report">
+  <label for="file">Attach your file</label>
+  <input id="file" type="file" name="submission">
+  <button id="send" type="button">Submit assignment</button>
+  <div id="out"></div>
+</div>
+<script>
+document.getElementById('send').addEventListener('click', function () {
+  var f = document.getElementById('file').files[0];
+  var o = document.getElementById('out');
+  o.style.display = 'block';
+  o.textContent = f ? ('Received "' + f.name + '" (' + f.size + ' bytes) titled "' +
+      (document.getElementById('title').value || 'untitled') + '"') : 'No file attached.';
+  document.title = f ? 'Submission received - fixture' : 'Assignment upload - fixture';
+});
+</script></body></html>
