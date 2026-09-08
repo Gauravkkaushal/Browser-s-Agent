@@ -24,14 +24,21 @@ from .browser_bridge import bridge
 from .events import audit_path, bus
 from .knowledge import known_hosts
 from .loop import registry
+from contextlib import asynccontextmanager
 
-app = FastAPI(title="Browser Agent", version="2.0.0")
 
-@app.on_event("shutdown")
-async def _close_http_pool() -> None:
-    """Release the shared model-API connection pool on the way out."""
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Startup: pre-warm the shared model-API HTTP connection pool so the first
+    task does not pay the TCP + TLS handshake on top of its own model latency.
+    Shutdown: release the pool gracefully.
+    """
+    await llm.warmup()
+    yield
     await llm.aclose()
 
+
+app = FastAPI(title="Browser Agent", version="2.0.0", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
