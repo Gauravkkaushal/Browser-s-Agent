@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
-import { ArrowUpOutlined, DownloadOutlined, PlusOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { ArrowUpOutlined, PlusOutlined, SettingOutlined } from '@ant-design/icons'
 import { Button, Input, Select, Typography } from 'antd'
-import type { ChatMessage } from '../../features/agent-runner/model'
+import type { ChatHistoryThread, ChatMessage, MaskingReport, PendingConfirmation } from '../../features/agent-runner/model'
 import { privacyModes } from '../../entities/mode/model'
-import type { PrivacyMode, ReasonResult } from '../../shared/types/netrashield'
+import type { PrivacyMode } from '../../shared/types/netrashield'
 import { SettingsDrawer } from '../settings/SettingsDrawer'
 import './ChatShell.css'
 
@@ -17,11 +17,25 @@ type ChatShellProps = {
   task: string
   maskedScreenshot?: string | null
   maskedCount?: number
-  reason?: ReasonResult | null
-  onExecuteAction?: () => void
+  pageLine?: string
+  hasPage?: boolean
+  masking?: MaskingReport | null
+  blocked?: string[]
+  history?: ChatHistoryThread[]
+  pending?: PendingConfirmation | null
+  preApprove?: boolean
+  onPreApproveChange?: (value: boolean) => void
+  onApprove?: () => void
+  onApproveAll?: () => void
+  onDeny?: () => void
+  onCancel?: () => void
+  onNewChat?: () => void
+  onDetach?: () => void
+  isDetached?: boolean
   onModeChange: (mode: PrivacyMode) => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
   onTaskChange: (task: string) => void
+  localModelStatus?: string | null
 }
 
 export function ChatShell({
@@ -33,18 +47,71 @@ export function ChatShell({
   task,
   maskedScreenshot,
   maskedCount = 0,
-  reason,
-  onExecuteAction,
+  pageLine = '',
+  hasPage = true,
+  masking,
+  blocked = [],
+  history = [],
+  pending,
+  preApprove = false,
+  onPreApproveChange,
+  onApprove,
+  onApproveAll,
+  onDeny,
+  onCancel,
+  onNewChat,
+  onDetach,
+  isDetached = false,
   onModeChange,
   onSubmit,
   onTaskChange,
+  localModelStatus,
 }: ChatShellProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [shieldOpen, setShieldOpen] = useState(false)
+  const [activePanel, setActivePanel] = useState<'chat' | 'details' | 'history'>('chat')
+
+  /**
+   * Keep the newest line in view, the way every chat does.
+   *
+   * The thread scrolls, but nothing was ever scrolling it, so each new line
+   * landed below the fold: you sent something and the view stayed where it
+   * was, showing older text, as though your message had gone nowhere.
+   *
+   * Following is conditional on already being at the bottom. If you have
+   * scrolled up to read something, arriving text must not yank you away --
+   * a chat that fights you when you scroll back is worse than one that
+   * does not follow at all.
+   */
+  const threadRef = useRef<HTMLElement | null>(null)
+  const stickToBottom = useRef(true)
+
+  const onThreadScroll = () => {
+    const node = threadRef.current
+    if (!node) return
+    const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
+    stickToBottom.current = distanceFromBottom < 60
+  }
+
+  useEffect(() => {
+    const node = threadRef.current
+    if (!node || !stickToBottom.current) return
+    node.scrollTop = node.scrollHeight
+  }, [messages, statusText, pending, isRunning])
+
+  // Whatever you type is the newest thing in the thread by definition, so
+  // sending always returns you to the bottom even if you had scrolled up.
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    stickToBottom.current = true
+    onSubmit(event)
+  }
 
   const modeOptions = privacyModes.map((privacyMode) => ({
     label: privacyMode.title,
     value: privacyMode.id,
   }))
+  const hasDetails = Boolean(masking || blocked.length > 0 || maskedScreenshot)
+  const historyCount = history.length
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== 'Enter' || event.shiftKey) {
@@ -60,53 +127,6 @@ export function ChatShell({
     event.currentTarget.form?.requestSubmit()
   }
 
-  function downloadPrivacyCertificate() {
-    const certHtml = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <title>NetraShield Zero-Leak Privacy Audit Certificate</title>
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0b1120; color: #f8fafc; padding: 40px; display: flex; justify-content: center; }
-    .cert { background: #1e293b; border: 2px solid #10b981; border-radius: 16px; padding: 36px; max-width: 600px; width: 100%; box-shadow: 0 20px 50px rgba(0,0,0,0.5); }
-    .header { text-align: center; border-bottom: 1px solid rgba(148,163,184,0.2); padding-bottom: 20px; }
-    .title { color: #34d399; font-size: 24px; font-weight: 800; margin: 0; }
-    .subtitle { color: #94a3b8; font-size: 14px; margin-top: 6px; }
-    .meta { margin: 24px 0; background: #0f172a; border-radius: 10px; padding: 18px; }
-    .meta-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 13px; color: #cbd5e1; }
-    .meta-val { font-weight: 700; color: #6ee7b7; }
-    .img-box { text-align: center; margin: 20px 0; }
-    .img-box img { max-width: 100%; border-radius: 8px; border: 1px solid #10b981; }
-    .footer { text-align: center; font-size: 11px; color: #64748b; margin-top: 24px; }
-  </style>
-</head>
-<body>
-  <div class="cert">
-    <div class="header">
-      <h1 class="title">🛡️ NetraShield Privacy Audit Certificate</h1>
-      <div class="subtitle">ISRO SIH Challenge 26171 • Zero-Leak Guaranteed</div>
-    </div>
-    <div class="meta">
-      <div class="meta-row"><span>Audit Timestamp:</span><span class="meta-val">${new Date().toUTCString()}</span></div>
-      <div class="meta-row"><span>PII Elements Redacted:</span><span class="meta-val">${maskedCount} Elements</span></div>
-      <div class="meta-row"><span>Air-Gap / Privacy Mode:</span><span class="meta-val">${mode.toUpperCase()}</span></div>
-      <div class="meta-row"><span>Data Leak Status:</span><span class="meta-val" style="color:#34d399;">0% (ZERO LEAK VERIFIED ✅)</span></div>
-    </div>
-    ${maskedScreenshot ? `<div class="img-box"><h3>Visual Redaction Proof:</h3><img src="${maskedScreenshot}" alt="Masked Proof" /></div>` : ''}
-    <div class="footer">Generated cryptographically on-device by NetraShield Autonomous Browser Agent.</div>
-  </div>
-</body>
-</html>`
-
-    const blob = new Blob([certHtml], { type: 'text/html' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `NetraShield-Privacy-Audit-${Date.now()}.html`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
   return (
     <main className="chat-popup" aria-label="NetraShield assistant">
       <section className="assistant-header" aria-label="Assistant status">
@@ -117,8 +137,24 @@ export function ChatShell({
           <div>
             <Typography.Text className="brand-title">NetraShield</Typography.Text>
             <Typography.Text className="brand-subtitle">Private page assistant</Typography.Text>
+            {localModelStatus && (
+              <span style={{ fontSize: '10px', color: '#6ee7b7', border: '1px solid #10b981', padding: '1px 4px', borderRadius: '4px', marginLeft: '6px' }}>
+                Nano: {localModelStatus}
+              </span>
+            )}
           </div>
         </div>
+        {!isDetached && (
+          <Button
+            className="detach-button"
+            size="small"
+            type="text"
+            onClick={onDetach}
+            title="Chrome closes this popup whenever the agent opens a tab. Open it as its own window and it stays put."
+          >
+            Keep open
+          </Button>
+        )}
       </section>
 
       <SettingsDrawer
@@ -126,7 +162,44 @@ export function ChatShell({
         open={settingsOpen}
       />
 
-      {messages.length === 0 && !isRunning && (
+      <nav className="panel-tabs" aria-label="NetraShield views">
+        <button
+          type="button"
+          className={activePanel === 'chat' ? 'active' : ''}
+          onClick={() => setActivePanel('chat')}
+        >
+          Chat
+        </button>
+        <button
+          type="button"
+          className={activePanel === 'details' ? 'active' : ''}
+          onClick={() => setActivePanel('details')}
+        >
+          More details
+          {hasDetails && <span className="details-dot" aria-hidden="true" />}
+        </button>
+        <button
+          type="button"
+          className={activePanel === 'history' ? 'active' : ''}
+          onClick={() => setActivePanel('history')}
+        >
+          History
+          {historyCount > 0 && <span className="tab-count">{historyCount}</span>}
+        </button>
+        <button
+          type="button"
+          className="new-chat-tab"
+          disabled={isRunning}
+          onClick={() => {
+            onNewChat?.()
+            setActivePanel('chat')
+          }}
+        >
+          New chat
+        </button>
+      </nav>
+
+      {activePanel === 'chat' && messages.length === 0 && !isRunning && (
         <section className="hero-copy" aria-label="Greeting">
           <Typography.Title level={1}>
             <span>Hello, Gaurav.</span>
@@ -136,78 +209,230 @@ export function ChatShell({
             Ask naturally. Sensitive fields are masked locally before any reasoning starts.
           </Typography.Paragraph>
 
+          {/*
+            Quick actions, from Gaurav's upstream work.
+            There they called dedicated NETRASHIELD_* extension messages. Here
+            they fill the composer instead: this agent takes plain English and
+            plans the scrolling and reading itself, so a shortcut only needs to
+            say what you want -- and you can edit it before sending, which the
+            fixed buttons could not.
+          */}
           <div className="quick-actions-list">
             <button
               type="button"
               className="quick-action-pill"
-              onClick={() => {
-                onTaskChange('Scroll through the whole page and give a complete summary')
-              }}
+              onClick={() => onTaskChange('Scroll through the whole page and give a complete summary')}
             >
-              📜 Full Page Scroll & Summarize
+              📜 Full Page Scroll &amp; Summarize
             </button>
             <button
               type="button"
               className="quick-action-pill"
-              onClick={() => {
-                onTaskChange('Scan and redact all sensitive PII on this page')
-              }}
+              onClick={() => onTaskChange('Scan and redact all sensitive PII on this page')}
             >
-              🛡️ Scan & Redact Sensitive PII
+              🛡️ Scan &amp; Redact Sensitive PII
             </button>
           </div>
         </section>
       )}
 
-      {(messages.length > 0 || isRunning) && (
-        <section className="chat-thread" aria-label="Conversation">
+      {activePanel === 'chat' && (messages.length > 0 || isRunning) && (
+        <section
+          className="chat-thread"
+          aria-label="Conversation"
+          ref={threadRef}
+          onScroll={onThreadScroll}
+        >
           {messages.map((message) => (
             <article className={`message ${message.role}`} key={message.id}>
               {message.text}
             </article>
           ))}
           {isRunning && <article className="message assistant pending">{statusText}</article>}
-          {maskedScreenshot && (
-            <div className="masked-proof-card" role="region" aria-label="Masked Snapshot Proof">
-              <div className="masked-proof-header">
-                <div className="masked-proof-badge">
-                  <span className="masked-proof-dot" />
-                  <span>🛡️ On-Device Redaction</span>
-                </div>
-                <span className="masked-proof-count">{maskedCount} PII Masked</span>
+          {pending && (
+            <div className="approval-card" role="alertdialog" aria-label="Approval required">
+              <div className="approval-head">
+                <span className="approval-dot" />
+                <span>Approval needed</span>
+                {pending.requiresLiveHuman && (
+                  <span className="approval-live">cannot be pre-approved</span>
+                )}
               </div>
-              <div className="masked-proof-img-wrap">
-                <img src={maskedScreenshot} alt="Visual Redaction Proof" className="masked-proof-img" />
-                <div className="masked-proof-tag">Visual Masking Proof</div>
+              <div className="approval-action">{pending.preview}</div>
+              {pending.textPreview && (
+                <div className="approval-text">{pending.textPreview}</div>
+              )}
+              <dl className="approval-meta">
+                <dt>page</dt><dd>{pending.url}</dd>
+                {pending.reason ? (<><dt>why</dt><dd>{pending.reason}</dd></>) : null}
+                <dt>rules</dt><dd>{pending.rulesFired.join(', ') || '—'}</dd>
+              </dl>
+              {pending.screenshot && (
+                <img
+                  src={pending.screenshot}
+                  alt="Page at the moment of the request, sensitive regions blacked out"
+                  className="approval-img"
+                />
+              )}
+              <div className="approval-actions">
+                <Button size="small" onClick={onDeny}>Cancel</Button>
+                {!pending.requiresLiveHuman && (
+                  <Button size="small" onClick={onApproveAll}>Don't ask again</Button>
+                )}
+                <Button size="small" type="primary" onClick={onApprove}>Approve</Button>
               </div>
-              <div className="masked-proof-footer">
-                <button type="button" className="audit-download-btn" onClick={downloadPrivacyCertificate}>
-                  <DownloadOutlined /> Export Privacy Audit Certificate
-                </button>
-              </div>
-            </div>
-          )}
-
-          {reason?.command?.type === 'highlight' && reason?.command?.targetId && (
-            <div className="action-confirm-card">
-              <div className="action-confirm-info">
-                <ThunderboltOutlined style={{ color: '#10b981', fontSize: '15px' }} />
-                <span>Target identified: <strong>{reason.command.targetId}</strong></span>
-              </div>
-              <Button
-                type="primary"
-                size="small"
-                className="action-confirm-btn"
-                onClick={onExecuteAction}
-              >
-                Confirm & Highlight Target
-              </Button>
             </div>
           )}
         </section>
       )}
 
-      <form className="composer" onSubmit={onSubmit}>
+      {activePanel === 'details' && (
+        <section className="details-panel" aria-label="More details">
+          {!hasDetails && (
+            <div className="details-empty">
+              Redaction details will appear here after NetraShield reads a page.
+            </div>
+          )}
+
+          {(masking || blocked.length > 0) && (
+            <section className="shield-panel" aria-label="What was hidden from the model">
+              <button
+                type="button"
+                className="shield-head"
+                onClick={() => setShieldOpen((open) => !open)}
+                aria-expanded={shieldOpen}
+              >
+                <span className="shield-dot" />
+                <span className="shield-title">
+                  {masking ? `${masking.piiTotal + masking.maskedRegions} hidden before the model read anything` : 'Blocked'}
+                </span>
+                <span className="shield-caret">{shieldOpen ? '−' : '+'}</span>
+              </button>
+
+              {masking && (
+                <div className="shield-chips">
+                  {Object.entries(masking.byType).map(([kind, n]) => (
+                    <span className="shield-chip" key={kind}>{kind} ×{n}</span>
+                  ))}
+                  {masking.occurrences > masking.piiTotal && (
+                    <span className="shield-chip quiet">
+                      in {masking.occurrences} places
+                    </span>
+                  )}
+                  {masking.maskedRegions > 0 && (
+                    <span className="shield-chip regions">blacked out ×{masking.maskedRegions}</span>
+                  )}
+                  {masking.injectionsNeutralized > 0 && (
+                    <span className="shield-chip danger">
+                      page tried to give orders ×{masking.injectionsNeutralized}
+                    </span>
+                  )}
+                  {masking.readBySight && (
+                    <span className="shield-chip danger">read from a screenshot</span>
+                  )}
+                  {masking.piiTotal === 0 && masking.maskedRegions === 0 && !masking.readBySight && (
+                    <span className="shield-chip quiet">nothing sensitive on this page</span>
+                  )}
+                </div>
+              )}
+
+              {masking?.maskNote && (
+                <p className="shield-warn">{masking.maskNote}</p>
+              )}
+
+              {shieldOpen && masking && (
+                <>
+                  <p className="shield-note">
+                    This is the text the model actually received. Every
+                    <code>[REDACTED:…]</code> is a value it never saw.
+                  </p>
+                  <pre className="shield-sample">{masking.llmInputSample || '(no page text)'}</pre>
+                  {masking.regions.length > 0 && (
+                    <>
+                      <p className="shield-note">
+                        Each black box on the snapshot, and what it covers.
+                      </p>
+                      <ul className="shield-injections">
+                        {masking.regions.map((r, i) => (
+                          <li key={i}>
+                            <b>{r.kind}</b> — {r.box[2]}×{r.box[3]} at {r.box[0]},{r.box[1]}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                  {masking.injections.length > 0 && (
+                    <ul className="shield-injections">
+                      {masking.injections.map((item, i) => (
+                        <li key={i}><b>{item.kind}</b> — {item.text}</li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              )}
+
+              {blocked.map((reason, i) => (
+                <p className="shield-blocked" key={i}>{reason}</p>
+              ))}
+            </section>
+          )}
+
+          {maskedScreenshot && (
+            <section className="masked-proof-dock" aria-label="Masked snapshot proof">
+              <div className="masked-proof-card" role="region" aria-label="Masked Snapshot Proof">
+                <div className="masked-proof-header">
+                  <div className="masked-proof-badge">
+                    <span className="masked-proof-dot" />
+                    <span>🛡️ On-Device Redaction</span>
+                  </div>
+                  <span className="masked-proof-count">{maskedCount} PII Masked</span>
+                </div>
+                <div className="masked-proof-img-wrap">
+                  <img src={maskedScreenshot} alt="Visual Redaction Proof" className="masked-proof-img" />
+                  <div className="masked-proof-tag">Visual Masking Proof</div>
+                </div>
+              </div>
+            </section>
+          )}
+        </section>
+      )}
+
+      {activePanel === 'history' && (
+        <section className="history-panel" aria-label="Chat history">
+          {history.length === 0 ? (
+            <div className="details-empty">
+              Previous chats will appear here when you open a new page or start a new chat.
+            </div>
+          ) : (
+            history.map((thread) => (
+              <article className="history-thread" key={thread.id}>
+                <header className="history-head">
+                  <div>
+                    <h2>{thread.title}</h2>
+                    {thread.pageUrl && <p>{thread.pageUrl}</p>}
+                  </div>
+                  <time dateTime={thread.createdAt}>
+                    {new Date(thread.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </time>
+                </header>
+                <div className="history-messages">
+                  {thread.messages.slice(-6).map((message) => (
+                    <p className={`history-message ${message.role}`} key={message.id}>
+                      {message.text}
+                    </p>
+                  ))}
+                </div>
+              </article>
+            ))
+          )}
+        </section>
+      )}
+
+      {activePanel === 'chat' && pageLine && (
+        <p className={`page-line${hasPage ? '' : ' none'}`}>{pageLine}</p>
+      )}
+
+      {activePanel === 'chat' && <form className="composer" onSubmit={handleSubmit}>
         <Input.TextArea
           aria-label="Ask NetraShield"
           autoSize={{ minRows: 1, maxRows: 4 }}
@@ -239,17 +464,32 @@ export function ChatShell({
             value={mode}
             variant="borderless"
           />
-          <Button
-            className="send-button"
-            disabled={isRunning || !task.trim()}
-            htmlType="submit"
-            icon={<ArrowUpOutlined />}
-            shape="circle"
-            type="primary"
-            aria-label="Send"
-          />
+          {isRunning ? (
+            <Button className="stop-button" size="small" danger onClick={onCancel} aria-label="Stop the task">
+              Stop
+            </Button>
+          ) : (
+            <Button
+              className="send-button"
+              disabled={!task.trim()}
+              htmlType="submit"
+              icon={<ArrowUpOutlined />}
+              shape="circle"
+              type="primary"
+              aria-label="Send"
+            />
+          )}
         </div>
-      </form>
+      </form>}
+
+      {activePanel === 'chat' && <label className="preapprove-row" title="Remembered across tasks. High-risk actions stay classified and logged either way — this only changes whether you answer up front or one at a time. Authentication codes always need you, live.">
+        <input
+          type="checkbox"
+          checked={preApprove}
+          onChange={(event) => onPreApproveChange?.(event.target.checked)}
+        />
+        <span>Don't ask before sending, posting or paying</span>
+      </label>}
 
       {!extensionReady && <p className="dev-note">Load the built dist folder as an unpacked Chrome extension.</p>}
     </main>

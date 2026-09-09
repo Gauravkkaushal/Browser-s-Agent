@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Vidyalaya Portal</title>
+<style>
+  :root {
+    --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --bg:#f4f6fa;
+    --accent:#2563eb; --accent-dark:#1d4ed8; --accent-soft:#eef2ff;
+    --danger:#dc2626; --good:#059669;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; font-family:'Segoe UI', system-ui, -apple-system, sans-serif;
+    background:var(--bg); color:var(--ink);
+  }
+
+  /* ---------- Auth screens ---------- */
+  #authGate {
+    min-height:100vh; display:flex; align-items:center; justify-content:center;
+    background:linear-gradient(160deg,#1e293b,#0f172a);
+    padding:24px;
+  }
+  .auth-card {
+    width:100%; max-width:400px; background:#fff; border-radius:14px;
+    padding:32px 32px 28px; box-shadow:0 20px 50px rgba(0,0,0,.25);
+  }
+  .brand { display:flex; align-items:center; gap:10px; margin-bottom:22px; }
+  .brand-mark {
+    width:34px; height:34px; border-radius:9px; background:var(--accent);
+    color:#fff; display:flex; align-items:center; justify-content:center;
+    font-weight:700; font-size:15px;
+  }
+  .brand-name { font-weight:700; font-size:16px; }
+  .auth-card h1 { font-size:19px; margin:0 0 4px; }
+  .auth-card p.sub { margin:0 0 22px; font-size:13px; color:var(--muted); }
+  label { display:block; font-size:12px; font-weight:600; color:#334155; margin:14px 0 6px; }
+  input[type="email"], input[type="password"], input[type="text"] {
+    width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px;
+    font-size:14px; outline:none; transition:border-color .15s;
+  }
+  input:focus { border-color:var(--accent); }
+  .otp-input { letter-spacing:.4em; font-size:18px; text-align:center; font-weight:600; }
+  .primary-btn {
+    width:100%; margin-top:22px; padding:11px; border:0; border-radius:8px;
+    background:var(--accent); color:#fff; font-size:14px; font-weight:600; cursor:pointer;
+  }
+  .primary-btn:hover { background:var(--accent-dark); }
+  .field-error { min-height:16px; font-size:12px; color:var(--danger); margin-top:6px; }
+  .hint-box {
+    margin-top:18px; font-size:12px; color:#475569; line-height:1.5;
+    background:var(--accent-soft); border-radius:8px; padding:10px 12px;
+  }
+
+  /* ---------- Dashboard shell ---------- */
+  #dashboardView { display:none; min-height:100vh; }
+  .shell { display:flex; min-height:100vh; }
+  .sidebar {
+    width:220px; flex-shrink:0; background:#111827; color:#cbd5e1;
+    padding:20px 14px; display:flex; flex-direction:column; gap:2px;
+  }
+  .sidebar .brand { color:#fff; padding:0 8px 20px; margin-bottom:8px; border-bottom:1px solid #1f2937; }
+  .navitem {
+    display:flex; align-items:center; gap:10px; width:100%; text-align:left;
+    padding:10px 12px; border:0; background:transparent; color:#cbd5e1;
+    border-radius:8px; font-size:14px; cursor:pointer;
+  }
+  .navitem:hover { background:#1f2937; color:#fff; }
+  .navitem.active { background:var(--accent); color:#fff; }
+  .navitem .dot { width:6px; height:6px; border-radius:50%; background:currentColor; opacity:.6; }
+
+  .main { flex:1; min-width:0; }
+  .topbar {
+    height:60px; background:#fff; border-bottom:1px solid var(--line);
+    display:flex; align-items:center; justify-content:space-between; padding:0 28px;
+  }
+  .topbar .who { display:flex; align-items:center; gap:10px; font-size:13px; color:var(--muted); }
+  .avatar {
+    width:32px; height:32px; border-radius:50%; background:var(--accent-soft);
+    color:var(--accent-dark); display:flex; align-items:center; justify-content:center;
+    font-weight:700; font-size:13px;
+  }
+  .content { padding:28px; }
+  .content h1 { font-size:20px; margin:0 0 4px; }
+  .content .sub { color:var(--muted); font-size:13px; margin:0 0 22px; }
+
+  .cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px,1fr)); gap:16px; }
+  .stat-card {
+    background:#fff; border:1px solid var(--line); border-radius:12px; padding:18px 20px;
+  }
+  .stat-card .num { font-size:26px; font-weight:700; }
+  .stat-card .label { font-size:12px; color:var(--muted); margin-top:2px; }
+
+  /* ---------- Attendance panel ---------- */
+  .panel {
+    background:#fff; border:1px solid var(--line); border-radius:12px; overflow:hidden;
+  }
+  .panel-head {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:16px 20px; border-bottom:1px solid var(--line);
+  }
+  .panel-head h2 { font-size:15px; margin:0; }
+  .panel-head .meta { font-size:12px; color:var(--muted); }
+  table { width:100%; border-collapse:collapse; }
+  thead th {
+    text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.05em;
+    color:var(--muted); padding:10px 20px; background:#f8fafc; border-bottom:1px solid var(--line);
+  }
+  tbody td { padding:12px 20px; border-bottom:1px solid #f1f5f9; font-size:14px; }
+  tbody tr:hover { background:#f8fafc; }
+  .roll { color:var(--muted); font-size:12px; }
+  .student-cell { display:flex; align-items:center; gap:10px; }
+  .mini-avatar {
+    width:28px; height:28px; border-radius:50%; background:#e2e8f0; color:#475569;
+    display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700;
+  }
+  td.check { text-align:center; }
+  input[type="checkbox"] { width:19px; height:19px; accent-color:var(--accent); cursor:pointer; }
+  .panel-foot { padding:16px 20px; display:flex; align-items:center; justify-content:space-between; }
+  .panel-head .actions { display:flex; align-items:center; gap:14px; }
+  .link-btn {
+    background:none; border:0; padding:0; color:var(--accent); font-size:13px;
+    font-weight:600; cursor:pointer;
+  }
+  .link-btn:hover { text-decoration:underline; }
+  .banner {
+    display:none; margin:0 20px 16px; padding:12px 16px; border-radius:8px;
+    background:#ecfdf5; color:var(--good); font-size:13px; font-weight:600;
+  }
+</style>
+</head>
+<body>
+
+  <div id="authGate">
+    <section id="loginView" class="auth-card">
+      <div class="brand"><span class="brand-mark">VP</span><span class="brand-name">Vidyalaya Portal</span></div>
+      <h1>Teacher sign in</h1>
+      <p class="sub">Sign in with your staff account to continue.</p>
+      <label for="loginEmail">Email</label>
+      <input id="loginEmail" type="email" name="email" autocomplete="username" placeholder="you@school.edu">
+      <label for="loginPassword">Password</label>
+      <input id="loginPassword" type="password" name="password" autocomplete="current-password" placeholder="••••••••">
+      <div class="field-error" id="loginError"></div>
+      <button id="signinBtn" class="primary-btn" type="button">Sign in</button>
+      <div class="hint-box">Demo portal &mdash; any email and password are accepted.</div>
+    </section>
+
+    <section id="otpView" class="auth-card" hidden>
+      <div class="brand"><span class="brand-mark">VP</span><span class="brand-name">Vidyalaya Portal</span></div>
+      <h1>Verify your identity</h1>
+      <p class="sub">Enter the one-time code sent to your email.</p>
+      <label for="otp">One-time code</label>
+      <input id="otp" class="otp-input" name="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000">
+      <div class="field-error" id="otpError"></div>
+      <button id="verifyBtn" class="primary-btn" type="button">Verify</button>
+      <div class="hint-box">Test mode: the code sent to your email is <strong>123456</strong>.</div>
+    </section>
+  </div>
+
+  <div id="dashboardView">
+    <div class="shell">
+      <nav class="sidebar">
+        <div class="brand"><span class="brand-mark">VP</span><span class="brand-name">Vidyalaya</span></div>
+        <button class="navitem active" data-view="home" type="button"><span class="dot"></span>Dashboard</button>
+        <button class="navitem" data-view="attendance" type="button"><span class="dot"></span>Mark Attendance</button>
+        <button class="navitem" data-view="students" type="button"><span class="dot"></span>Students</button>
+        <button class="navitem" data-view="timetable" type="button"><span class="dot"></span>Timetable</button>
+        <button class="navitem" data-view="reports" type="button"><span class="dot"></span>Reports</button>
+      </nav>
+
+      <div class="main">
+        <div class="topbar">
+          <strong id="pageTitle">Dashboard</strong>
+          <div class="who"><span class="avatar">TC</span>Ms. Teacher &middot; Class X-A</div>
+        </div>
+
+        <div class="content">
+          <section id="view-home">
+            <h1>Welcome back</h1>
+            <p class="sub">Here's what's happening in Class X-A today.</p>
+            <div class="cards">
+              <div class="stat-card"><div class="num">14</div><div class="label">Students enrolled</div></div>
+              <div class="stat-card"><div class="num">1</div><div class="label">Class today</div></div>
+              <div class="stat-card"><div class="num">Pending</div><div class="label">Today's attendance</div></div>
+              <div class="stat-card"><div class="num">92%</div><div class="label">Attendance this month</div></div>
+            </div>
+          </section>
+
+          <section id="view-attendance" hidden>
+            <h1>Mark Attendance</h1>
+            <p class="sub">Class X-A &middot; <span id="todayLabel"></span></p>
+            <div class="banner" id="submittedBanner">Attendance submitted successfully.</div>
+            <div class="panel">
+              <div class="panel-head">
+                <h2>Student roster</h2>
+                <div class="actions">
+                  <span class="meta">14 students</span>
+                  <button id="selectAllBtn" type="button" class="link-btn">Mark all present</button>
+                  <button id="clearAllBtn" type="button" class="link-btn">Clear all</button>
+                </div>
+              </div>
+              <form id="attendanceForm">
+                <table>
+                  <thead><tr><th>Student</th><th>Roll no.</th><th style="text-align:center;">Present</th></tr></thead>
+                  <tbody id="rosterBody"></tbody>
+                </table>
+                <div class="panel-foot">
+                  <span class="meta">Unchecked students are marked absent.</span>
+                  <button id="submitBtn" class="primary-btn" style="width:auto; padding:10px 22px;" type="submit">Submit Attendance</button>
+                </div>
+              </form>
+            </div>
+          </section>
+
+          <section id="view-students" hidden>
+            <h1>Students</h1>
+            <p class="sub">This demo portal only implements the Dashboard and Mark Attendance tabs.</p>
+          </section>
+          <section id="view-timetable" hidden>
+            <h1>Timetable</h1>
+            <p class="sub">This demo portal only implements the Dashboard and Mark Attendance tabs.</p>
+          </section>
+          <section id="view-reports" hidden>
+            <h1>Reports</h1>
+            <p class="sub">This demo portal only implements the Dashboard and Mark Attendance tabs.</p>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  var TEST_OTP = '123456';
+  var students = [
+    'Aarav Mehta', 'Diya Patel', 'Gaurav Kumar', 'Ishaan Rao', 'Kavya Nair',
+    'Meera Iyer', 'Nikhil Sharma', 'Nikhil Verma', 'Priya Singh', 'Rohan Gupta',
+    'Sara Khan', 'Tanvi Joshi', 'Vikram Desai', 'Yash Malhotra',
+  ];
+
+  function initials(name) {
+    var parts = name.split(' ');
+    return (parts[0][0] + (parts[1] ? parts[1][0] : '')).toUpperCase();
+  }
+
+  function renderRoster() {
+    var body = document.getElementById('rosterBody');
+    students.forEach(function (name, i) {
+      var tr = document.createElement('tr');
+
+      var tdName = document.createElement('td');
+      var wrap = document.createElement('div');
+      wrap.className = 'student-cell';
+      var av = document.createElement('span');
+      av.className = 'mini-avatar';
+      av.textContent = initials(name);
+      var nameSpan = document.createElement('span');
+      nameSpan.textContent = name;
+      wrap.appendChild(av);
+      wrap.appendChild(nameSpan);
+      tdName.appendChild(wrap);
+      tr.appendChild(tdName);
+
+      var tdRoll = document.createElement('td');
+      tdRoll.className = 'roll';
+      tdRoll.textContent = 'R' + String(101 + i);
+      tr.appendChild(tdRoll);
+
+      var tdCheck = document.createElement('td');
+      tdCheck.className = 'check';
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.id = 'present-' + i;
+      cb.setAttribute('aria-label', name);
+      tdCheck.appendChild(cb);
+      tr.appendChild(tdCheck);
+
+      body.appendChild(tr);
+    });
+  }
+
+  document.getElementById('signinBtn').addEventListener('click', function () {
+    var email = document.getElementById('loginEmail').value.trim();
+    var pw = document.getElementById('loginPassword').value;
+    var err = document.getElementById('loginError');
+    if (!email || !pw) {
+      err.textContent = 'Enter an email and password.';
+      return;
+    }
+    err.textContent = '';
+    document.getElementById('loginView').hidden = true;
+    document.getElementById('otpView').hidden = false;
+  });
+
+  document.getElementById('verifyBtn').addEventListener('click', function () {
+    var code = document.getElementById('otp').value.trim();
+    var err = document.getElementById('otpError');
+    if (code !== TEST_OTP) {
+      err.textContent = 'Incorrect code. Try again.';
+      return;
+    }
+    // Remove the whole auth gate -- including the login screen's identifier
+    // field, which stays in the DOM (just hidden) while the OTP screen is
+    // shown -- so the page no longer looks like a sign-in wall at all.
+    document.getElementById('authGate').remove();
+    if (window.history && history.replaceState) {
+      history.replaceState(null, '', '/fixtures/attendance');
+    }
+    document.getElementById('todayLabel').textContent = new Date().toDateString();
+    renderRoster();
+    document.getElementById('dashboardView').style.display = 'block';
+  });
+
+  function showView(name) {
+    ['home', 'attendance', 'students', 'timetable', 'reports'].forEach(function (v) {
+      document.getElementById('view-' + v).hidden = v !== name;
+    });
+    document.querySelectorAll('.navitem').forEach(function (btn) {
+      btn.classList.toggle('active', btn.dataset.view === name);
+    });
+    var titles = {
+      home: 'Dashboard', attendance: 'Mark Attendance', students: 'Students',
+      timetable: 'Timetable', reports: 'Reports',
+    };
+    document.getElementById('pageTitle').textContent = titles[name] || 'Dashboard';
+  }
+
+  document.querySelectorAll('.navitem').forEach(function (btn) {
+    btn.addEventListener('click', function () { showView(btn.dataset.view); });
+  });
+
+  document.getElementById('selectAllBtn').addEventListener('click', function () {
+    document.querySelectorAll('#rosterBody input[type="checkbox"]').forEach(function (cb) {
+      cb.checked = true;
+    });
+  });
+
+  document.getElementById('clearAllBtn').addEventListener('click', function () {
+    document.querySelectorAll('#rosterBody input[type="checkbox"]').forEach(function (cb) {
+      cb.checked = false;
+    });
+  });
+
+  document.getElementById('attendanceForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    document.getElementById('submittedBanner').style.display = 'block';
+    document.getElementById('submitBtn').disabled = true;
+    Array.prototype.forEach.call(
+      document.querySelectorAll('#rosterBody input[type="checkbox"]'),
+      function (cb) { cb.disabled = true; }
+    );
+  });
+})();
+</script>
+</body>
+</html>

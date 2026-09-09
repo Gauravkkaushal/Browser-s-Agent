@@ -35,8 +35,6 @@ class AgentRequestPayload(BaseModel):
     redactions: List[Dict[str, Any]] = Field(default_factory=list)
     visualSummary: Optional[Dict[str, Any]] = None
     screenshot: Optional[str] = None
-    pageText: Optional[str] = None
-    lang: Optional[str] = "en"
     ping: Optional[bool] = False
 
 class AgentCommand(BaseModel):
