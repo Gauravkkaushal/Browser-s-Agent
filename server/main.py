@@ -195,6 +195,19 @@ async def fixture_upload():
     return HTMLResponse(_read(FIXTURES, "upload.html"))
 
 
+@app.get("/fixtures/attendance", include_in_schema=False)
+async def fixture_attendance_redirect():
+    # The fixture's login/OTP screen relies on the URL itself looking like a
+    # sign-in flow (the same signal a real portal's /login route would give),
+    # so the canonical entry point carries that path segment.
+    return RedirectResponse(url="/fixtures/attendance/login")
+
+
+@app.get("/fixtures/attendance/login", response_class=HTMLResponse)
+async def fixture_attendance():
+    return HTMLResponse(_read(FIXTURES, "attendance.html"))
+
+
 # --- credential vault -------------------------------------------------------
 # Values arrive from the operator's own browser on localhost and go straight to
 # the local vault file. They are never returned by any endpoint, never logged,

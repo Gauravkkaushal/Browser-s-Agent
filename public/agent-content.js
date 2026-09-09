@@ -428,8 +428,17 @@ function detectLoginWall() {
     .filter((el) => isVisible(el))
     .some((el) => SIGNIN_WORDING.test(accessibleName(el)))
 
+  // A second factor (an emailed or texted one-time code) is part of the same
+  // wall: the URL still looks like a sign-in flow and the identifier field is
+  // usually still present, even though the password field is gone by then.
+  const otpWording = /\b(one[- ]?time code|verification code|otp)\b/i.test(bodyText)
+  const otpField = document.querySelector('input[autocomplete="one-time-code"], input[name*="otp" i]')
+
   if (signinUrl && (identifier || pwd)) {
-    return { app: appNameFromHost(), kind: 'credential', hint: 'Sign in with your account to continue.' }
+    const hint = (!pwd && (otpField || otpWording))
+      ? 'Sign in, then enter the one-time code sent to your email to continue.'
+      : 'Sign in with your account to continue.'
+    return { app: appNameFromHost(), kind: 'credential', hint: hint }
   }
   if (pwd && identifier && signinSubmit) {
     return { app: appNameFromHost(), kind: 'credential', hint: 'Sign in with your account to continue.' }
@@ -587,11 +596,20 @@ function walk() {
     const protectedField = isProtectedField(el)
     let value = ''
     if (editable) {
-      const v = el.value !== undefined && el.value !== null ? el.value : (el.textContent || '')
-      if (protectedField) {
-        value = v ? '[PROTECTED INPUT] len=' + String(v).length : ''
+      // A checkbox/radio's `.value` is its HTML value ATTRIBUTE (default "on"),
+      // which says nothing about whether it is actually checked -- report the
+      // state that matters instead, so a task that toggles a list of items can
+      // be verified afterwards from the observation alone.
+      const inputType = tag === 'input' ? (el.getAttribute('type') || 'text').toLowerCase() : ''
+      if (inputType === 'checkbox' || inputType === 'radio') {
+        value = el.checked ? 'checked' : 'unchecked'
       } else {
-        value = redact(String(v).slice(0, TEXT_CAP))
+        const v = el.value !== undefined && el.value !== null ? el.value : (el.textContent || '')
+        if (protectedField) {
+          value = v ? '[PROTECTED INPUT] len=' + String(v).length : ''
+        } else {
+          value = redact(String(v).slice(0, TEXT_CAP))
+        }
       }
     }
 
@@ -985,6 +1003,16 @@ async function doClick(el) {
     })
   } catch (e) { /* observation is an optimisation, not a requirement */ }
 
+  // A checkbox/radio's `checked` is an IDL property, not a reflected HTML
+  // attribute -- toggling it mutates neither childList nor attributes, so the
+  // observer above is structurally blind to it. Without this, a dispatched
+  // click that DID toggle the box looks identical to one that did nothing,
+  // the code below reaches for the native-activation fallback either way, and
+  // that second `.click()` flips the box straight back to where it started.
+  const isCheckable = el.tagName === 'INPUT' &&
+    (el.type === 'checkbox' || el.type === 'radio')
+  const beforeChecked = isCheckable ? el.checked : null
+
   const beforeFocus = document.activeElement
   firePointer(target, 'pointerdown', pt)
   fireMouse(target, 'mousedown', pt)
@@ -996,6 +1024,7 @@ async function doClick(el) {
   await sleep(320)
   if (observer) { try { observer.disconnect() } catch (e) { /* ignore */ } }
   if (document.activeElement !== beforeFocus) reacted = true
+  if (isCheckable && el.checked !== beforeChecked) reacted = true
 
   // Only when NOTHING stirred is a native activation worth trying.
   let usedNativeFallback = false

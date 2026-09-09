@@ -57,6 +57,13 @@ Rules:
   detects login walls on its own and handles them.
 - Actions that send, buy, pay, post or delete are irreversible; make them their
   own final step so the human can approve them.
+- A command shaped "do X for everyone/everything except A and B" (e.g. marking
+  a roster, bulk-selecting items) is ONE step: "apply X to everyone, using a
+  bulk control (Select all / Mark all present / Check all) if the page offers
+  one, then individually undo it only on rows matching the named exclusions."
+  Do not expand the exclusion list into one step per person or item -- the
+  agent resolves names against whatever list is actually on screen as it
+  works through it.
 - 3 to 8 steps. Be concrete about what data must be gathered.
 
 TRUST BOUNDARY

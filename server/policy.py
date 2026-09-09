@@ -32,6 +32,16 @@ HIGH_RISK_NAME = re.compile(
     re.I,
 )
 
+# --- A submit that commits a bulk state change over a list of items ---------
+# Named separately from HIGH_RISK_NAME so the audit trail says exactly what
+# made it consequential (a batch of per-row edits, not a single field), the
+# same way "submit-verb" is named separately from an ordinary high-risk click.
+BULK_ROSTER_SUBMIT_NAME = re.compile(
+    r"submit attendance|save attendance|confirm attendance|mark attendance|"
+    r"submit roster",
+    re.I,
+)
+
 # --- Fields whose contents must never be typed by the agent unattended ------
 HIGH_RISK_FIELD = re.compile(
     r"password|\botp\b|o\.t\.p|cvv|cvc|card number|cardnumber|aadhaar|upi pin|"
@@ -143,13 +153,16 @@ def evaluate(action: ActionProposal, observation: Optional[Observation]) -> Poli
     # nothing to undo. Stopping to ask about it is not caution, it is noise,
     # and noise is what trains someone to hit Approve without reading. The
     # button that actually sends is not editable, so that one still stops.
-    if verb == "click" and name and HIGH_RISK_NAME.search(name):
+    if verb == "click" and name and (HIGH_RISK_NAME.search(name) or BULK_ROSTER_SUBMIT_NAME.search(name)):
         el = observation.element(action.target.element_id) if (
             observation and action.target.element_id) else None
         focusing_a_field = el is not None and (
             el.is_editable or el.role in ("textbox", "searchbox", "combobox"))
         if not focusing_a_field:
-            rules.append("high-risk-control-name:" + name[:40])
+            if BULK_ROSTER_SUBMIT_NAME.search(name):
+                rules.append("bulk-roster-submit")
+            else:
+                rules.append("high-risk-control-name:" + name[:40])
 
     # ---- HIGH: typing into a protected field ------------------------------
     if verb == "type":
@@ -266,7 +279,27 @@ def evaluate(action: ActionProposal, observation: Optional[Observation]) -> Poli
     )
 
 
-def redact_preview(action: ActionProposal) -> str:
+def _roster_preview(observation: Optional[Observation]) -> Optional[str]:
+    """When a submit is about to commit a page full of checkboxes -- an
+    attendance roster, a bulk-selection list -- the confirmation modal should
+    show what will actually happen, not just the button's name. This is
+    generic to any checkbox-driven bulk form, not specific to attendance."""
+    if observation is None:
+        return None
+    checkboxes = [el for el in observation.interactive_elements if el.role == "checkbox"]
+    if not checkboxes:
+        return None
+    present = [el.name or el.text for el in checkboxes if el.value == "checked"]
+    absent = [el.name or el.text for el in checkboxes if el.value != "checked"]
+    if not present and not absent:
+        return None
+    summary = "%d checked, %d unchecked" % (len(present), len(absent))
+    if absent:
+        summary += " (unchecked: %s)" % ", ".join(n for n in absent if n)[:200]
+    return summary
+
+
+def redact_preview(action: ActionProposal, observation: Optional[Observation] = None) -> str:
     """Human-readable one-liner for the confirmation modal."""
     verb = action.action
     if verb == "fill_credential":
@@ -281,6 +314,12 @@ def redact_preview(action: ActionProposal) -> str:
         return 'type "%s"' % (text[:120] + ("..." if len(text) > 120 else ""))
     if verb == "navigate":
         return "navigate to " + (action.params.url or "")
+    control_name = _element_name(action, observation)
+    if verb == "submit" or (verb == "click" and BULK_ROSTER_SUBMIT_NAME.search(control_name)):
+        roster = _roster_preview(observation)
+        label = control_name or action.target.element_id or "the form"
+        if roster:
+            return "submit %s: %s" % (label, roster)
     if verb == "click":
         return "click " + (action.target.name or action.target.element_id or "element")
     if verb == "keypress":

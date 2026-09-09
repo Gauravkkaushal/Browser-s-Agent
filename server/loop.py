@@ -1166,7 +1166,7 @@ class Task:
             await bus.emit("CONFIRMATION_GRANTED", {
                 "action_id": action.action_id,
                 "action": action.action,
-                "preview": redact_preview(action),
+                "preview": redact_preview(action, obs),
                 "granted_by": "operator pre-authorisation for this task",
                 "decision": decision.model_dump(),
             }, task_id=self.task_id, step=self.step)
@@ -1183,7 +1183,7 @@ class Task:
         payload = {
             "action_id": action.action_id,
             "action": action.action,
-            "preview": redact_preview(action),
+            "preview": redact_preview(action, obs),
             "text_preview": action.params.text or "",
             "target_name": action.target.name or "",
             "url": obs.url,
@@ -1208,7 +1208,7 @@ class Task:
             self.error = ("%s was never carried out: the approval sat unanswered for "
                           "%.0fs. Nothing was sent. Tick 'don't ask again' if you do "
                           "not want to be asked each time."
-                          % (redact_preview(action), config.CONFIRM_TIMEOUT_S))
+                          % (redact_preview(action, obs), config.CONFIRM_TIMEOUT_S))
             await bus.emit("CONFIRMATION_DENIED", {
                 "action_id": action.action_id,
                 "timed_out": True,
@@ -1221,7 +1221,7 @@ class Task:
         if granted:
             await bus.emit("CONFIRMATION_GRANTED", {
                 "action_id": action.action_id, "action": action.action,
-                "preview": redact_preview(action),
+                "preview": redact_preview(action, obs),
             }, task_id=self.task_id, step=self.step)
         elif self.state == "WAITING_FOR_CONFIRMATION":
             await bus.emit("CONFIRMATION_DENIED", {
