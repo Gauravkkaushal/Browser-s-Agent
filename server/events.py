@@ -63,14 +63,40 @@ class EventBus:
         if len(self._recent) > 500:
             self._recent = self._recent[-500:]
 
+        # Notify subscribers; collect any whose queue has overflowed.
+        # Emit a visible ERROR to the cockpit before removing it, so the UI
+        # can show a "reconnect" banner instead of silently going stale.
+        overflowed: List[asyncio.Queue] = []
         for q in list(self._subscribers):
             try:
                 q.put_nowait(env)
             except asyncio.QueueFull:
-                self._subscribers.discard(q)
+                overflowed.append(q)
+
+        for q in overflowed:
+            _overflow_notice = {
+                "v": 1, "type": "ERROR", "ts": now_iso(),
+                "task_id": task_id, "step": step, "seq": seq,
+                "payload": {
+                    "error": "Cockpit event queue overflowed — the live stream was "
+                             "interrupted. Refresh the cockpit to reconnect.",
+                    "overflow": True,
+                },
+            }
+            try:
+                # Make room for the notice by discarding the oldest item.
+                q.get_nowait()
+                q.put_nowait(_overflow_notice)
+            except (asyncio.QueueFull, asyncio.QueueEmpty):
+                pass
+            self._subscribers.discard(q)
 
         if task_id:
-            _append_audit(task_id, env)
+            # Run the file write on a thread-pool worker so the event loop is
+            # never blocked by disk I/O (important on slow or networked storage).
+            asyncio.create_task(
+                asyncio.to_thread(_append_audit, task_id, env)
+            )
         return env
 
 

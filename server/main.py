@@ -24,14 +24,21 @@ from .browser_bridge import bridge
 from .events import audit_path, bus
 from .knowledge import known_hosts
 from .loop import registry
+from contextlib import asynccontextmanager
 
-app = FastAPI(title="Browser Agent", version="2.0.0")
 
-@app.on_event("shutdown")
-async def _close_http_pool() -> None:
-    """Release the shared model-API connection pool on the way out."""
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Startup: pre-warm the shared model-API HTTP connection pool so the first
+    task does not pay the TCP + TLS handshake on top of its own model latency.
+    Shutdown: release the pool gracefully.
+    """
+    await llm.warmup()
+    yield
     await llm.aclose()
 
+
+app = FastAPI(title="Browser Agent", version="2.0.0", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -186,6 +193,19 @@ async def fixture_shop():
 @app.get("/fixtures/upload", response_class=HTMLResponse)
 async def fixture_upload():
     return HTMLResponse(_read(FIXTURES, "upload.html"))
+
+
+@app.get("/fixtures/attendance", include_in_schema=False)
+async def fixture_attendance_redirect():
+    # The fixture's login/OTP screen relies on the URL itself looking like a
+    # sign-in flow (the same signal a real portal's /login route would give),
+    # so the canonical entry point carries that path segment.
+    return RedirectResponse(url="/fixtures/attendance/login")
+
+
+@app.get("/fixtures/attendance/login", response_class=HTMLResponse)
+async def fixture_attendance():
+    return HTMLResponse(_read(FIXTURES, "attendance.html"))
 
 
 # --- credential vault -------------------------------------------------------

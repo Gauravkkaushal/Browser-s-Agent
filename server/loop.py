@@ -15,6 +15,7 @@ import asyncio
 import re
 import time
 import uuid
+import random
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -321,8 +322,16 @@ class Task:
         payload = action.model_dump()
         return await bridge.request("act", {"action": payload}, task_id=self.task_id)
 
-    async def step_once(self, obs: Observation) -> Optional[Observation]:
-        """observe -> reason -> policy -> execute -> verify. Returns next obs."""
+    async def step_once(self, obs: Observation) -> tuple:
+        """observe -> reason -> policy -> execute -> verify.
+
+        Returns (next_obs, fallback_obs):
+          - next_obs     the post-action observation to continue the loop from,
+                         or None when the step was blocked/denied/repeated.
+          - fallback_obs the freshest observation taken inside this call that the
+                         outer loop can reuse instead of issuing another bridge
+                         round-trip. None when no observation was taken.
+        """
         self.step += 1
         
         # The reasoner gets a SEPARATE, sanitized copy. The original stays intact
@@ -343,37 +352,38 @@ class Task:
         await self.set_state("REASONING")
         try:
             action = None
-            
-            # 1. Try local on-device reasoning FIRST (Task 1c). Chrome's built-in
-            # Nano/Prompt API is experimental and often unavailable, so failure
-            # here must be a soft fallback to the configured server model chain.
-            try:
-                local_res = await bridge.request("local_reason", {
-                    "observation": obs.model_dump(),
-                    "plan": self.plan.objective if self.plan else self.command
-                }, task_id=self.task_id)
-            except BridgeError as exc:
-                await bus.emit("VERIFICATION_FAILED", {
-                    "reason": "local Nano reasoner unavailable; falling back to hosted model: %s" % exc,
-                    "counted_as_strike": False,
-                }, task_id=self.task_id, step=self.step)
-                local_res = None
 
-            if local_res and local_res.get("ok") and local_res.get("result"):
-                res = local_res["result"]
-                prop = res.get("proposal", {})
-                if prop and prop.get("confidence", 0) >= 0.55:
-                    try:
-                        action = ActionProposal(**prop)
-                        action.perception_source = res.get("source", "local-nano")
-                        action.local_confidence = prop.get("confidence")
-                        action.local_ms = res.get("ms")
-                        # Re-ground against original obs
-                        from .reasoner import _ground
-                        action = _ground(action, obs)
-                    except Exception:
-                        # Fallback to hosted model if schema fails
-                        action = None
+            # 1. Try local on-device reasoning (Chrome Nano / window.ai).
+            # Gated behind config.LOCAL_REASON_ENABLED because the API is
+            # experimental and almost never available -- paying a bridge
+            # round-trip on every step that always ends in BridgeError wastes
+            # 100-300ms and emits misleading events. Set LOCAL_REASON_ENABLED=true
+            # in .env only when you have confirmed window.ai works in your build.
+            if config.LOCAL_REASON_ENABLED:
+                try:
+                    local_res = await bridge.request("local_reason", {
+                        "observation": obs.model_dump(),
+                        "plan": self.plan.objective if self.plan else self.command
+                    }, task_id=self.task_id)
+                except BridgeError as exc:
+                    await bus.emit("LOCAL_REASON_UNAVAILABLE", {
+                        "reason": "Chrome Nano not available; using cloud model: %s" % exc,
+                    }, task_id=self.task_id, step=self.step)
+                    local_res = None
+
+                if local_res and local_res.get("ok") and local_res.get("result"):
+                    res = local_res["result"]
+                    prop = res.get("proposal", {})
+                    if prop and prop.get("confidence", 0) >= 0.55:
+                        try:
+                            action = ActionProposal(**prop)
+                            action.perception_source = res.get("source", "local-nano")
+                            action.local_confidence = prop.get("confidence")
+                            action.local_ms = res.get("ms")
+                            from .reasoner import _ground
+                            action = _ground(action, obs)
+                        except Exception:
+                            action = None
             
             # 2. Fallback to hosted reasoner if local failed or low confidence
             if action is None:
@@ -389,9 +399,7 @@ class Task:
                 action = _ground(action, obs)
                 
         except MalformedAction as exc:
-            # An unusable reply costs a step, not the task. This escaping as a
-            # fatal error ended a multi-site run at the final hop because one
-            # optional field arrived as a string instead of an object.
+            # An unusable reply costs a step, not the task.
             await bus.emit("VERIFICATION_FAILED", {
                 "reason": str(exc), "counted_as_strike": False,
             }, task_id=self.task_id, step=self.step)
@@ -401,7 +409,7 @@ class Task:
                 "verdict": "rejected",
                 "detail": str(exc)[:200],
             })
-            return None
+            return None, None
         except ModelError as exc:
             raise RuntimeError("the reasoner could not produce a valid action: %s" % exc)
 
@@ -464,7 +472,7 @@ class Task:
                     "even after it was removed from what the agent can see: %s"
                     % (repeats, note)
                 )
-            return None
+            return None, None
 
         await bus.emit("ACTION_PROPOSED", {
             "action_id": action.action_id,
@@ -493,22 +501,37 @@ class Task:
                     "verdict": "rejected",
                     "detail": "note needs params.text",
                 })
-                return None
+                return None, None
             
             self.notes.append(fact[:1200])
+            # Auditability: is this fact actually traceable to the page just
+            # observed, or could it equally be the model's own background
+            # knowledge? `finish` has always been checked this way (see
+            # `_reject_unearned_finish`); `note` is where an ungrounded claim
+            # first enters the record, and by the time it reaches `finish` or a
+            # composed message it just looks like an established fact. This is
+            # informational only -- a note may legitimately synthesise several
+            # earlier notes, or record "the page requires a QR scan", neither
+            # of which is a quote off the current page -- so it is not rejected,
+            # only recorded for whoever reviews the run.
+            support = _grounding_ratio(fact, obs)
+            grounding = ("unchecked: nothing specific enough to trace" if support is None
+                        else "%.0f%% of the specifics were found on the observed page"
+                             % (support * 100))
             await bus.emit("ACTION_EXECUTED", {
                 "action_id": action.action_id, "action": "note",
                 "result": {"recorded": fact[:300], "notes_held": len(self.notes)},
+                "grounding": grounding,
             }, task_id=self.task_id, step=self.step)
             self.history.append({
                 "step": self.step,
                 "summary": "note -> recorded a finding",
                 "verdict": "verified",
-                "detail": fact[:200],
+                "detail": fact[:200] + " | grounding: " + grounding,
             })
-            return obs
+            return obs, None
 
-        # --- QUOTER ---
+
         if action.action == "request_quoted_message":
             purpose = action.params.purpose or "Write the outgoing message based on the notes."
             quoted = await compose_message(self.command, self.notes, purpose)
@@ -520,7 +543,7 @@ class Task:
                     "verdict": "failed",
                     "detail": fail_msg,
                 })
-                return obs
+                return obs, None
             
             self.quoted_message = quoted
             self.notes.append(f"Prepared quoted message for purpose '{purpose}': {quoted[:200]}")
@@ -535,9 +558,9 @@ class Task:
                 "verdict": "verified",
                 "detail": quoted[:200],
             })
-            return obs
+            return obs, None
 
-        # --- REPLAN ---
+
         # An open-ended command ("do what he asked me to") cannot be planned
         # properly at the start, because the objective is written somewhere the
         # agent has not read yet. Once it HAS read it, it says so here and gets
@@ -553,7 +576,7 @@ class Task:
                     "verdict": "rejected",
                     "detail": "replan needs params.discovered saying what was learned",
                 })
-                return None
+                return None, None
             if self._replans >= config.MAX_REPLANS:
                 self.history.append({
                     "step": self.step,
@@ -562,7 +585,7 @@ class Task:
                     "detail": "the plan has been rewritten enough; carry it out or "
                               "report what is blocking you",
                 })
-                return None
+                return None, None
             self._replans += 1
             await self.set_state("PLANNING", "rewriting the plan around what was just read")
             done = "\n".join(
@@ -586,10 +609,9 @@ class Task:
             })
             # A fresh plan deserves a clean slate for the repeat detector.
             self._recent_signatures = []
-            self._dead_targets = {}
-            return obs
+            return obs, None
 
-        # --- TERMINAL VERBS ---
+
         if action.action in TERMINAL_VERBS:
             if action.action == "finish":
                 # A model cannot declare victory having done nothing. Some models
@@ -618,11 +640,40 @@ class Task:
                             "Reason: %s Last claim: %s"
                             % (rejection, (action.params.summary or action.reason)[:200])
                         )
-                    return None
+                    return None, None
                 self.summary = action.params.summary or action.reason
                 raise _Finished()
             self.error = action.params.error or action.reason
             raise RuntimeError(self.error)
+
+        # --- ALREADY SENT? ---
+        #
+        # A "click Send" that was misjudged as unverified (the page updated a
+        # beat slower than the freshness check) leaves the model believing it
+        # still has to send the message, and it comes back with another click,
+        # or an Enter press, aimed at the same composer. If the tracked text
+        # has already left every editable field, there is nothing left to
+        # submit -- executing the action again risks a duplicate message, and
+        # asking a human to approve a click that can only be a no-op is its own
+        # kind of false alarm. Confirm it is really gone and stop here instead.
+        if (self._last_typed and action.action in ("click", "keypress", "submit")
+                and not verifier.text_pending_in_a_field(obs, self._last_typed)):
+            await bus.emit("ACTION_EXECUTED", {
+                "action_id": action.action_id, "action": action.action,
+                "result": {"skipped": True},
+                "note": "the previously typed text is no longer in any field -- "
+                        "it was already sent; not repeating the send",
+            }, task_id=self.task_id, step=self.step)
+            self.history.append({
+                "step": self.step,
+                "summary": "%s (%s) -> SKIPPED, already sent" % (action.action, redact_preview(action)),
+                "verdict": "verified",
+                "detail": "the text this action would have sent is no longer in the "
+                          "composer; a prior action already sent it",
+            })
+            self._last_typed = ""
+            self._recent_signatures = [s for s in self._recent_signatures if s != signature]
+            return obs, None
 
         # --- POLICY ---
         await self.set_state("POLICY_CHECK")
@@ -651,9 +702,9 @@ class Task:
                 "summary": "%s -> BLOCKED by security capability gate" % action.action,
                 "verdict": "denied", "detail": block_reason,
             })
-            return None
+            return None, None
             
-        # 2. Existing policy rules
+
         decision = evaluate(action, obs)
         if decision.decision == "deny":
             await bus.emit("POLICY_DENIED", {
@@ -665,7 +716,7 @@ class Task:
                 "summary": "%s -> refused by policy" % action.action,
                 "verdict": "denied", "detail": decision.reason,
             })
-            return None
+            return None, None
 
         if decision.decision == "confirm":
             granted = await self._request_confirmation(action, decision, obs)
@@ -701,7 +752,9 @@ class Task:
                 if permanent:
                     break
                 if attempt_n < config.ACTION_RETRIES:
-                    await asyncio.sleep(0.8)
+                    # Jitter avoids thundering-herd on the browser when multiple
+                    # retries happen in quick succession on a slow or busy page.
+                    await asyncio.sleep(0.8 + random.uniform(0, 0.4))
 
         if exec_error is not None:
             self.history.append({
@@ -709,7 +762,8 @@ class Task:
                 "summary": "%s -> could not execute" % action.action,
                 "verdict": "failed", "detail": exec_error,
             })
-            return await self._recover(obs, exec_error)
+            fallback = await self._recover(obs, exec_error)
+            return None, fallback
 
         await bus.emit("ACTION_EXECUTED", {
             "action_id": action.action_id, "action": action.action,
@@ -727,7 +781,8 @@ class Task:
 
         # --- VERIFY against a FRESH observation ---
         await self.set_state("VERIFYING")
-        await asyncio.sleep(0.15)
+        # Note: asyncio.sleep(0.15) was removed here. The freshness checker
+        # already validates timestamps; this pause added latency with no benefit.
         # Capture whenever the agent lands somewhere new, as well as on the
         # regular cadence. Arriving at a new site is exactly the moment the
         # operator wants to see what was blacked out before anything left the
@@ -741,26 +796,7 @@ class Task:
         if want_shot:
             self._last_shot_site = _site_of(after.url)
 
-        # Be patient with a slow site. Judging a page that is still loading is
-        # judging a page that has not happened yet -- and calling that a failure
-        # is how an agent gives up on a server that was merely taking its time.
-        waited = 0.0
-        while after.page_state.loading and waited < config.SLOW_PAGE_PATIENCE_S:
-            self._guard()
-            if waited == 0.0:
-                await bus.emit("STATE_CHANGED", {
-                    "state": "VERIFYING",
-                    "detail": "the page is still loading; waiting for it to settle",
-                }, task_id=self.task_id, step=self.step)
-            await asyncio.sleep(1.0)
-            waited += 1.0
-            after = await self.observe()
-        if waited:
-            await bus.emit("RECOVERY_COMPLETED", {
-                "handled": True, "handler": "wait-for-slow-page",
-                "detail": "waited %.0fs for the page to finish loading before judging it"
-                          % waited,
-            }, task_id=self.task_id, step=self.step)
+        after = await self._wait_for_settle(after, state_label="VERIFYING")
 
         stale = verifier.check_freshness(obs, after, action, executed_at)
         if stale is not None:
@@ -797,7 +833,7 @@ class Task:
                 "verdict": "verified",
                 "detail": "; ".join(verdict.signals[:3]),
             })
-            return after
+            return after, None
 
         # A page that is still working is not a failed action. Re-observe with
         # patience instead of spending one of the three strikes on it.
@@ -825,7 +861,8 @@ class Task:
                     "verdict": "verified",
                     "detail": "; ".join(verdict.signals[:3]),
                 })
-                return settled
+                return settled, None
+
             after = settled
 
         if signature != self._last_failed_signature:
@@ -853,7 +890,39 @@ class Task:
                 % (verdict.reason, "; ".join(verdict.signals[:4]))
             )
 
-        return await self._recover(after, verdict.reason)
+        fallback = await self._recover(after, verdict.reason)
+        return None, fallback
+
+    async def _wait_for_settle(self, obs: Observation, state_label: str = "OBSERVING") -> Observation:
+        """Be patient with a slow site. Judging a page that is still loading is
+        judging a page that has not happened yet -- and calling that a failure
+        is how an agent gives up on a server that was merely taking its time.
+
+        A single-page app (WhatsApp Web, Gmail, ...) reports the DOM's
+        `readyState` as complete long before its own JS has finished bootstrapping
+        and rendering anything -- the QR canvas, the inbox list, whatever the
+        real screen is. Reasoning against that half-built page is how a login
+        wall gets misread as an empty page and the model gives up on a site it
+        never actually got to see.
+        """
+        waited = 0.0
+        while obs.page_state.loading and waited < config.SLOW_PAGE_PATIENCE_S:
+            self._guard()
+            if waited == 0.0:
+                await bus.emit("STATE_CHANGED", {
+                    "state": state_label,
+                    "detail": "the page is still loading; waiting for it to settle",
+                }, task_id=self.task_id, step=self.step)
+            await asyncio.sleep(1.0)
+            waited += 1.0
+            obs = await self.observe()
+        if waited:
+            await bus.emit("RECOVERY_COMPLETED", {
+                "handled": True, "handler": "wait-for-slow-page",
+                "detail": "waited %.0fs for the page to finish loading before judging it"
+                          % waited,
+            }, task_id=self.task_id, step=self.step)
+        return obs
 
     def _reject_unearned_finish(self, action: ActionProposal,
                                 obs: Observation) -> Optional[str]:
@@ -952,7 +1021,8 @@ class Task:
         them would take over their window.
         """
         try:
-            return await self.observe(screenshot=True)
+            obs = await self.observe(screenshot=True)
+            return await self._wait_for_settle(obs, state_label="OBSERVING")
         except BridgeError as exc:
             if not _UNREADABLE_PAGE.search(str(exc)):
                 raise
@@ -973,7 +1043,8 @@ class Task:
                 ) from open_exc
             await bus.emit("ACTION_EXECUTED", {"action": "open_tab", "result": res},
                            task_id=self.task_id, step=0)
-            return await self.observe(screenshot=True)
+            obs = await self.observe(screenshot=True)
+            return await self._wait_for_settle(obs, state_label="OBSERVING")
 
     async def _read_document_if_needed(self, obs: Observation) -> Observation:
         """Put a PDF's words into page_text, so the agent can actually read it.
@@ -1095,7 +1166,7 @@ class Task:
             await bus.emit("CONFIRMATION_GRANTED", {
                 "action_id": action.action_id,
                 "action": action.action,
-                "preview": redact_preview(action),
+                "preview": redact_preview(action, obs),
                 "granted_by": "operator pre-authorisation for this task",
                 "decision": decision.model_dump(),
             }, task_id=self.task_id, step=self.step)
@@ -1112,7 +1183,7 @@ class Task:
         payload = {
             "action_id": action.action_id,
             "action": action.action,
-            "preview": redact_preview(action),
+            "preview": redact_preview(action, obs),
             "text_preview": action.params.text or "",
             "target_name": action.target.name or "",
             "url": obs.url,
@@ -1137,7 +1208,7 @@ class Task:
             self.error = ("%s was never carried out: the approval sat unanswered for "
                           "%.0fs. Nothing was sent. Tick 'don't ask again' if you do "
                           "not want to be asked each time."
-                          % (redact_preview(action), config.CONFIRM_TIMEOUT_S))
+                          % (redact_preview(action, obs), config.CONFIRM_TIMEOUT_S))
             await bus.emit("CONFIRMATION_DENIED", {
                 "action_id": action.action_id,
                 "timed_out": True,
@@ -1150,7 +1221,7 @@ class Task:
         if granted:
             await bus.emit("CONFIRMATION_GRANTED", {
                 "action_id": action.action_id, "action": action.action,
-                "preview": redact_preview(action),
+                "preview": redact_preview(action, obs),
             }, task_id=self.task_id, step=self.step)
         elif self.state == "WAITING_FOR_CONFIRMATION":
             await bus.emit("CONFIRMATION_DENIED", {
@@ -1232,10 +1303,16 @@ class Task:
                     obs = await self.wait_for_login(obs)
 
                 await self.set_state("OBSERVING")
-                nxt = await self.step_once(obs)
+                nxt, fallback = await self.step_once(obs)
                 if nxt is not None:
                     obs = nxt
+                elif fallback is not None:
+                    # Reuse the observation already taken inside step_once for
+                    # verification or recovery; avoids a second bridge round-trip.
+                    obs = fallback
                 else:
+                    # No observation was taken inside step_once (early exits:
+                    # MalformedAction, policy-deny before execute). Fetch one now.
                     await asyncio.sleep(0.2)
                     obs = await self.observe()
 

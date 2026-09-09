@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "server": "uvicorn server.main:app --host 127.0.0.1 --port 8787",
+    "server": "python -m uvicorn server.main:app --host 127.0.0.1 --port 8787",
     "build": "tsc -b && vite build",
     "test": "vitest run",
-    "test:py": "python -m pytest server/tests -q",
+    "test:py": "python -m pytest server/twhests -q",
     "smoke": "python -m server.eval.run_smoke",
     "gates": "python scripts/check_gates.py",
     "generate:icons": "node scripts/generate-icons.mjs",

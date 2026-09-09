@@ -84,6 +84,13 @@ BRIDGE_TIMEOUT_S = float(os.getenv("BRIDGE_TIMEOUT_S", "90"))
 # own idea of "a while"; treating that as failure is just impatience.
 SLOW_PAGE_PATIENCE_S = float(os.getenv("SLOW_PAGE_PATIENCE_S", "25"))
 
+# ---- On-device reasoning (Chrome Nano / window.ai) ----
+# Disabled by default: the API is experimental and almost never available in
+# production Chrome builds. When enabled, every step tries a bridge round-trip
+# BEFORE the cloud model -- useful only if you have confirmed window.ai works
+# in your browser. Set LOCAL_REASON_ENABLED=true in .env to turn it on.
+LOCAL_REASON_ENABLED = os.getenv("LOCAL_REASON_ENABLED", "false").lower() == "true"
+
 # ---- Audit ----
 AUDIT_DIR = Path(os.getenv("AUDIT_DIR", str(Path.home() / ".browser-agent" / "tasks")))
 AUDIT_DIR.mkdir(parents=True, exist_ok=True)

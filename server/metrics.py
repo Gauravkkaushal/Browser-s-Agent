@@ -1,10 +1,10 @@
+import asyncio
 import time
-import threading
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 class PrivacyMetricsTracker:
     def __init__(self):
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
         self.total_requests = 0
         self.total_pii_shielded = 0
         self.pii_breakdown: Dict[str, int] = {
@@ -26,8 +26,8 @@ class PrivacyMetricsTracker:
         self.latest_masked_screenshot: Optional[str] = None
         self.start_time = time.time()
 
-    def record_request(self, payload: Any, latency_ms: float, source: str, command: Any):
-        with self._lock:
+    async def record_request(self, payload: Any, latency_ms: float, source: str, command: Any):
+        async with self._lock:
             self.total_requests += 1
             self.total_latency_ms += latency_ms
 
@@ -67,8 +67,8 @@ class PrivacyMetricsTracker:
             if len(self.recent_activities) > 25:
                 self.recent_activities.pop()
 
-    def get_summary(self) -> Dict[str, Any]:
-        with self._lock:
+    async def get_summary(self) -> Dict[str, Any]:
+        async with self._lock:
             avg_latency = (
                 round(self.total_latency_ms / self.total_requests, 2)
                 if self.total_requests > 0

@@ -178,6 +178,19 @@ DISCIPLINE
   keep clicking what you already clicked.
 - Actions that send, buy, pay, post or delete will be paused for human
   approval. Propose them normally when the task calls for them.
+- Before ticking a long list of checkboxes/toggles one by one, look for a bulk
+  control that does most of it in one click ("Select all", "Mark all present",
+  "Check all"). If the task is "do X for everyone except A and B", the fast
+  and correct path is: click the bulk control, THEN individually undo it on
+  just the named exceptions -- not one click per row. Use the row-by-row path
+  only when no such bulk control exists.
+  Example: task is "mark attendance except Gaurav", and `elements` shows a
+  "Mark all present" button plus checkboxes named "Aarav Mehta", "Gaurav
+  Kumar", "Priya Singh", ... . The correct next action is click("Mark all
+  present") FIRST (one action, expected.element_appears or a state change on
+  every checkbox), THEN on a later turn click(the "Gaurav Kumar" checkbox) to
+  uncheck it specifically -- never click "Aarav Mehta", "Priya Singh", etc.
+  individually when the bulk control already covered them.
 - Some tasks are answered by READING, not clicking: "what is in my inbox",
   "what does this cost", "what is due". If `page_text` already contains the
   answer, call finish immediately and put the ANSWER ITSELF in params.summary --

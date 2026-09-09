@@ -52,6 +52,16 @@ async def aclose() -> None:
     _CLIENT = None
 
 
+async def warmup() -> None:
+    """Pre-establish the shared HTTP connection pool.
+
+    Called once at server startup so the first model call in the first task
+    does not pay the TCP + TLS handshake cost on top of its own latency.
+    A failed warmup is harmless -- the client will be created on the next call.
+    """
+    client()  # creates the AsyncClient; connection is opened lazily on first request
+
+
 
 class ModelError(RuntimeError):
     pass
@@ -416,10 +426,23 @@ def parse_json(text: str) -> Dict[str, Any]:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
+    # Scan forward from the first '{' and find the matching closing brace by
+    # counting depth. Using rfind("}" ) is wrong: trailing prose that contains
+    # a '}' (e.g. "Hope this {helps}!") would silently extend the slice past
+    # the real object boundary and produce a JSONDecodeError.
     start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end > start:
-        return json.loads(text[start:end + 1])
+    if start != -1:
+        depth = 0
+        for i in range(start, len(text)):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start:i + 1])
+                    except json.JSONDecodeError:
+                        break
     raise ModelError("model did not return JSON: " + text[:200])
 
 
