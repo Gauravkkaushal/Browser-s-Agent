@@ -46,6 +46,20 @@ def check_freshness(before: Observation, after: Observation,
     return None
 
 
+def text_pending_in_a_field(obs: Observation, typed_text: str) -> bool:
+    """Is `typed_text` still sitting, unsent, in some editable field on `obs`?
+
+    Shared by the verifier (to recognise a send that worked) and by the loop
+    (to refuse to re-attempt a send once the text is already gone -- retrying
+    a click that already worked is how a message goes out twice).
+    """
+    needle = " ".join((typed_text or "").split())[:80].lower()
+    if not needle:
+        return False
+    return any(el.is_editable and needle in " ".join((el.value or "").split()).lower()
+               for el in obs.interactive_elements)
+
+
 def _text_of(obs: Observation) -> str:
     parts = [obs.title, obs.page_text]
     for el in obs.interactive_elements:
@@ -97,13 +111,8 @@ def verify(action: ActionProposal, before: Observation, after: Observation,
     # send failed and sends again. Duplicate messages are worse than an
     # unverified one, so check the composer directly.
     if last_typed and action.action in ("click", "keypress", "submit"):
-        needle = " ".join(last_typed.split())[:80].lower()
-        if needle:
-            def _in_a_field(o: Observation) -> bool:
-                return any(el.is_editable and needle in " ".join((el.value or "").split()).lower()
-                           for el in o.interactive_elements)
-
-            if _in_a_field(before) and not _in_a_field(after):
+        if text_pending_in_a_field(before, last_typed):
+            if not text_pending_in_a_field(after, last_typed):
                 return Verdict(
                     verdict="success",
                     signals=["the text left the field it was typed into",

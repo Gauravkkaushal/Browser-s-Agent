@@ -462,6 +462,26 @@ function detectOverlay() {
   return false
 }
 
+// A single-page app reports `document.readyState === 'complete'` the moment its
+// empty shell has downloaded -- long before its own JS has fetched, rendered
+// and settled the actual screen (an inbox list, a QR canvas, whatever the real
+// content is). Treating that shell as "loaded" is how a page gets judged, or
+// given up on, before it has actually happened: generic, no site names.
+function isStillBootstrapping(elementCount) {
+  const total = document.body ? document.body.querySelectorAll('*').length : 0
+  // A near-empty document after the shell has downloaded is still bootstrapping.
+  if (total < 25 && elementCount === 0) return true
+  // A visible, sizeable spinner/progress indicator with nothing yet to act on.
+  const spinner = Array.from(document.querySelectorAll(
+    '[role="progressbar"], [aria-busy="true"], [class*="spinner" i], [class*="loader" i], [class*="loading" i]'
+  )).find((el) => {
+    const r = el.getBoundingClientRect()
+    return isVisible(el, r) && r.width * r.height > 400
+  })
+  if (spinner && elementCount === 0) return true
+  return false
+}
+
 // ---------------------------------------------------------------------------
 // THE WALKER
 // ---------------------------------------------------------------------------
@@ -750,7 +770,7 @@ function walk() {
       max_y: Math.max(0, Math.round((document.documentElement.scrollHeight || 0) - window.innerHeight)),
     },
     page_state: {
-      loading: document.readyState !== 'complete',
+      loading: document.readyState !== 'complete' || isStillBootstrapping(elements.length),
       overlay_present: detectOverlay(),
       login_wall: detectLoginWall(),
     },

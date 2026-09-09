@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import re
 from typing import Any, Dict, List, Tuple
+from urllib.parse import urlparse
 
 from .schemas import Observation
 
@@ -104,6 +105,43 @@ def datamark(text: str) -> str:
     return " ".join(out)
 
 
+_URL_IN_TEXT = re.compile(r"https?://[^\s\"')]+", re.I)
+
+
+def find_suspicious_element_links(obs: Observation) -> List[Dict[str, str]]:
+    """Flag a URL sitting inside an element's name/text where nothing marks it
+    as a link -- an anchor's own `href` is normal; a raw URL printed into a
+    listitem or row's label is not.
+
+    This does not change what the model sees (rule 1 above forbids that); it
+    is audit-only, so an operator can tell a genuine control apart from
+    content shaped to look like one -- exactly the kind of thing a forged
+    "last message" preview or a planted deep-link would look like.
+    """
+    findings: List[Dict[str, str]] = []
+    page_host = ""
+    try:
+        page_host = (urlparse(obs.url).hostname or "").lower()
+    except ValueError:
+        pass
+    for el in obs.interactive_elements:
+        if el.role in ("link", "tab") and el.href:
+            continue  # a real link's href is not a surprise
+        hay = " ".join(filter(None, [el.name, el.text]))
+        for match in _URL_IN_TEXT.finditer(hay):
+            url = match.group(0)
+            try:
+                host = (urlparse(url).hostname or "").lower()
+            except ValueError:
+                continue
+            if host and page_host and host != page_host:
+                findings.append({
+                    "eid": el.eid, "role": el.role,
+                    "url": url[:200], "host": host,
+                })
+    return findings[:20]
+
+
 def sanitize_observation(obs: Observation) -> Tuple[Observation, Dict[str, Any]]:
     """Return a reasoner-safe view of `obs`, plus a report of what was masked.
 
@@ -116,6 +154,7 @@ def sanitize_observation(obs: Observation) -> Tuple[Observation, Dict[str, Any]]
     obs.page_text = datamark(neutralized)[:PAGE_TEXT_CAP]
 
     # Element name/text/value are deliberately untouched. See rule 1 above.
+    suspicious_links = find_suspicious_element_links(obs)
 
     report = {
         # What the walker hid inside the page, before anything was serialised.
@@ -136,5 +175,10 @@ def sanitize_observation(obs: Observation) -> Tuple[Observation, Dict[str, Any]]
         # the [REDACTED:...] placeholders in it ARE the masking, visible in the
         # exact bytes that leave the machine.
         "llm_input_sample": obs.page_text[:400],
+        # A raw off-site URL printed into a control that is not itself a link
+        # (a chat row, a list item) is worth a human's attention -- it can be a
+        # forged "last message" preview or a planted deep-link. Audit-only:
+        # never shown or hidden from the model, never acted on automatically.
+        "suspicious_links": suspicious_links,
     }
     return obs, report

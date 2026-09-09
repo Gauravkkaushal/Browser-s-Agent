@@ -504,15 +504,30 @@ class Task:
                 return None, None
             
             self.notes.append(fact[:1200])
+            # Auditability: is this fact actually traceable to the page just
+            # observed, or could it equally be the model's own background
+            # knowledge? `finish` has always been checked this way (see
+            # `_reject_unearned_finish`); `note` is where an ungrounded claim
+            # first enters the record, and by the time it reaches `finish` or a
+            # composed message it just looks like an established fact. This is
+            # informational only -- a note may legitimately synthesise several
+            # earlier notes, or record "the page requires a QR scan", neither
+            # of which is a quote off the current page -- so it is not rejected,
+            # only recorded for whoever reviews the run.
+            support = _grounding_ratio(fact, obs)
+            grounding = ("unchecked: nothing specific enough to trace" if support is None
+                        else "%.0f%% of the specifics were found on the observed page"
+                             % (support * 100))
             await bus.emit("ACTION_EXECUTED", {
                 "action_id": action.action_id, "action": "note",
                 "result": {"recorded": fact[:300], "notes_held": len(self.notes)},
+                "grounding": grounding,
             }, task_id=self.task_id, step=self.step)
             self.history.append({
                 "step": self.step,
                 "summary": "note -> recorded a finding",
                 "verdict": "verified",
-                "detail": fact[:200],
+                "detail": fact[:200] + " | grounding: " + grounding,
             })
             return obs, None
 
@@ -630,6 +645,35 @@ class Task:
                 raise _Finished()
             self.error = action.params.error or action.reason
             raise RuntimeError(self.error)
+
+        # --- ALREADY SENT? ---
+        #
+        # A "click Send" that was misjudged as unverified (the page updated a
+        # beat slower than the freshness check) leaves the model believing it
+        # still has to send the message, and it comes back with another click,
+        # or an Enter press, aimed at the same composer. If the tracked text
+        # has already left every editable field, there is nothing left to
+        # submit -- executing the action again risks a duplicate message, and
+        # asking a human to approve a click that can only be a no-op is its own
+        # kind of false alarm. Confirm it is really gone and stop here instead.
+        if (self._last_typed and action.action in ("click", "keypress", "submit")
+                and not verifier.text_pending_in_a_field(obs, self._last_typed)):
+            await bus.emit("ACTION_EXECUTED", {
+                "action_id": action.action_id, "action": action.action,
+                "result": {"skipped": True},
+                "note": "the previously typed text is no longer in any field -- "
+                        "it was already sent; not repeating the send",
+            }, task_id=self.task_id, step=self.step)
+            self.history.append({
+                "step": self.step,
+                "summary": "%s (%s) -> SKIPPED, already sent" % (action.action, redact_preview(action)),
+                "verdict": "verified",
+                "detail": "the text this action would have sent is no longer in the "
+                          "composer; a prior action already sent it",
+            })
+            self._last_typed = ""
+            self._recent_signatures = [s for s in self._recent_signatures if s != signature]
+            return obs, None
 
         # --- POLICY ---
         await self.set_state("POLICY_CHECK")
@@ -752,26 +796,7 @@ class Task:
         if want_shot:
             self._last_shot_site = _site_of(after.url)
 
-        # Be patient with a slow site. Judging a page that is still loading is
-        # judging a page that has not happened yet -- and calling that a failure
-        # is how an agent gives up on a server that was merely taking its time.
-        waited = 0.0
-        while after.page_state.loading and waited < config.SLOW_PAGE_PATIENCE_S:
-            self._guard()
-            if waited == 0.0:
-                await bus.emit("STATE_CHANGED", {
-                    "state": "VERIFYING",
-                    "detail": "the page is still loading; waiting for it to settle",
-                }, task_id=self.task_id, step=self.step)
-            await asyncio.sleep(1.0)
-            waited += 1.0
-            after = await self.observe()
-        if waited:
-            await bus.emit("RECOVERY_COMPLETED", {
-                "handled": True, "handler": "wait-for-slow-page",
-                "detail": "waited %.0fs for the page to finish loading before judging it"
-                          % waited,
-            }, task_id=self.task_id, step=self.step)
+        after = await self._wait_for_settle(after, state_label="VERIFYING")
 
         stale = verifier.check_freshness(obs, after, action, executed_at)
         if stale is not None:
@@ -867,6 +892,37 @@ class Task:
 
         fallback = await self._recover(after, verdict.reason)
         return None, fallback
+
+    async def _wait_for_settle(self, obs: Observation, state_label: str = "OBSERVING") -> Observation:
+        """Be patient with a slow site. Judging a page that is still loading is
+        judging a page that has not happened yet -- and calling that a failure
+        is how an agent gives up on a server that was merely taking its time.
+
+        A single-page app (WhatsApp Web, Gmail, ...) reports the DOM's
+        `readyState` as complete long before its own JS has finished bootstrapping
+        and rendering anything -- the QR canvas, the inbox list, whatever the
+        real screen is. Reasoning against that half-built page is how a login
+        wall gets misread as an empty page and the model gives up on a site it
+        never actually got to see.
+        """
+        waited = 0.0
+        while obs.page_state.loading and waited < config.SLOW_PAGE_PATIENCE_S:
+            self._guard()
+            if waited == 0.0:
+                await bus.emit("STATE_CHANGED", {
+                    "state": state_label,
+                    "detail": "the page is still loading; waiting for it to settle",
+                }, task_id=self.task_id, step=self.step)
+            await asyncio.sleep(1.0)
+            waited += 1.0
+            obs = await self.observe()
+        if waited:
+            await bus.emit("RECOVERY_COMPLETED", {
+                "handled": True, "handler": "wait-for-slow-page",
+                "detail": "waited %.0fs for the page to finish loading before judging it"
+                          % waited,
+            }, task_id=self.task_id, step=self.step)
+        return obs
 
     def _reject_unearned_finish(self, action: ActionProposal,
                                 obs: Observation) -> Optional[str]:
@@ -965,7 +1021,8 @@ class Task:
         them would take over their window.
         """
         try:
-            return await self.observe(screenshot=True)
+            obs = await self.observe(screenshot=True)
+            return await self._wait_for_settle(obs, state_label="OBSERVING")
         except BridgeError as exc:
             if not _UNREADABLE_PAGE.search(str(exc)):
                 raise
@@ -986,7 +1043,8 @@ class Task:
                 ) from open_exc
             await bus.emit("ACTION_EXECUTED", {"action": "open_tab", "result": res},
                            task_id=self.task_id, step=0)
-            return await self.observe(screenshot=True)
+            obs = await self.observe(screenshot=True)
+            return await self._wait_for_settle(obs, state_label="OBSERVING")
 
     async def _read_document_if_needed(self, obs: Observation) -> Observation:
         """Put a PDF's words into page_text, so the agent can actually read it.

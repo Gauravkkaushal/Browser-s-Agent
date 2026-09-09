@@ -163,9 +163,34 @@ def evaluate(action: ActionProposal, observation: Optional[Observation]) -> Poli
             rules.append("high-risk-field-name")
 
     # ---- HIGH: Enter inside a consequential context ------------------------
+    #
+    # Pressing Enter in a composer submits it exactly as clicking "Send" does --
+    # WhatsApp, Gmail and most chat/comment boxes treat the two identically. A
+    # model that has just been told "Send" needs a human's approval can route
+    # around that by pressing Enter instead unless Enter gets the same scrutiny.
+    # The one carve-out is a plain search box: submitting a search is not
+    # consequential, and treating every Enter as high-risk would mean asking a
+    # human to approve typing a query into Google.
     if verb == "keypress" and (action.params.key_combo or "").strip().lower() == "enter":
         if url and HIGH_RISK_URL.search(url):
             rules.append("enter-on-high-risk-url")
+        el = observation.element(action.target.element_id) if (
+            observation and action.target.element_id) else None
+        if el is None and observation is not None and observation.focused_element:
+            el = observation.element(observation.focused_element.get("eid") or "")
+        field_hay = " ".join(filter(None, [
+            el.name if el else "", el.input_type if el else "", el.tag if el else "",
+            (observation.focused_element or {}).get("name", "") if observation else "",
+        ]))
+        looks_like_search = bool(re.search(r"search|find|filter|\bquery\b", field_hay, re.I))
+        editable = el is not None and (
+            el.is_editable or el.role in ("textbox", "searchbox", "combobox", "textarea"))
+        if editable and not looks_like_search:
+            rules.append("enter-submits-a-field:" + (el.name or el.role)[:40])
+        elif el is None and not looks_like_search:
+            # No element to clear this as a plain search box -- do not let
+            # silence stand in for safety.
+            rules.append("enter-with-unknown-target")
 
     if rules:
         # Entering an authentication code or a password is the one class a
