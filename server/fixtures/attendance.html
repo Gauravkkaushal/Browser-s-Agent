@@ -5,172 +5,360 @@
 <title>Vidyalaya Portal</title>
 <style>
   :root {
-    --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --bg:#f4f6fa;
-    --accent:#2563eb; --accent-dark:#1d4ed8; --accent-soft:#eef2ff;
-    --danger:#dc2626; --good:#059669;
+    --ink:#111827; --muted:#6b7280; --line:#e5e7eb; --bg:#f6f7fb;
+    --accent:#4f46e5; --accent-dark:#4338ca; --accent-soft:#eef2ff;
+    --danger:#dc2626; --danger-soft:#fef2f2; --good:#059669; --good-soft:#ecfdf5;
+    --amber:#d97706; --amber-soft:#fffbeb;
   }
   * { box-sizing:border-box; }
   body {
     margin:0; font-family:'Segoe UI', system-ui, -apple-system, sans-serif;
-    background:var(--bg); color:var(--ink);
+    background:var(--bg); color:var(--ink); -webkit-font-smoothing:antialiased;
   }
+  svg { display:block; }
 
   /* ---------- Auth screens ---------- */
   #authGate {
-    min-height:100vh; display:flex; align-items:center; justify-content:center;
-    background:linear-gradient(160deg,#1e293b,#0f172a);
-    padding:24px;
+    min-height:100vh; display:flex; align-items:stretch; justify-content:center;
+    background:
+      radial-gradient(circle at 15% 20%, rgba(129,140,248,.35), transparent 40%),
+      radial-gradient(circle at 85% 0%, rgba(56,189,248,.25), transparent 45%),
+      linear-gradient(160deg,#1e1b4b,#111827 70%);
   }
-  .auth-card {
-    width:100%; max-width:400px; background:#fff; border-radius:14px;
-    padding:32px 32px 28px; box-shadow:0 20px 50px rgba(0,0,0,.25);
+  .auth-shell {
+    width:100%; max-width:920px; margin:auto; padding:24px;
+    display:grid; grid-template-columns:1.1fr 1fr; gap:0;
+    background:#fff; border-radius:20px; overflow:hidden;
+    box-shadow:0 30px 70px rgba(15,23,42,.35);
   }
-  .brand { display:flex; align-items:center; gap:10px; margin-bottom:22px; }
-  .brand-mark {
-    width:34px; height:34px; border-radius:9px; background:var(--accent);
-    color:#fff; display:flex; align-items:center; justify-content:center;
-    font-weight:700; font-size:15px;
+  .auth-pitch {
+    background:
+      radial-gradient(circle at 20% 15%, rgba(255,255,255,.16), transparent 45%),
+      linear-gradient(155deg, var(--accent), #7c3aed 65%, #4338ca);
+    color:#fff; padding:44px 38px; display:flex; flex-direction:column;
+    justify-content:space-between; gap:28px; position:relative; overflow:hidden;
   }
-  .brand-name { font-weight:700; font-size:16px; }
-  .auth-card h1 { font-size:19px; margin:0 0 4px; }
-  .auth-card p.sub { margin:0 0 22px; font-size:13px; color:var(--muted); }
-  label { display:block; font-size:12px; font-weight:600; color:#334155; margin:14px 0 6px; }
+  .auth-pitch .rings { position:absolute; inset:auto -60px -60px auto; width:220px; height:220px;
+    border-radius:50%; border:1px solid rgba(255,255,255,.18); }
+  .auth-pitch .rings::before { content:''; position:absolute; inset:28px; border-radius:50%;
+    border:1px solid rgba(255,255,255,.16); }
+  .pitch-brand { display:flex; align-items:center; gap:10px; }
+  .pitch-mark {
+    width:38px; height:38px; border-radius:11px; background:rgba(255,255,255,.16);
+    border:1px solid rgba(255,255,255,.3); display:flex; align-items:center; justify-content:center;
+    color:#fff;
+  }
+  .pitch-brand strong { font-size:16px; letter-spacing:.2px; }
+  .pitch-copy h2 { font-size:26px; line-height:1.28; margin:0 0 12px; font-weight:700; }
+  .pitch-copy p { font-size:13.5px; line-height:1.6; color:rgba(255,255,255,.82); margin:0; max-width:320px; }
+  .pitch-features { display:flex; flex-direction:column; gap:12px; position:relative; z-index:1; }
+  .pitch-feature { display:flex; align-items:center; gap:10px; font-size:12.5px; color:rgba(255,255,255,.92); }
+  .pitch-feature .ico {
+    width:26px; height:26px; border-radius:8px; background:rgba(255,255,255,.14);
+    display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  }
+
+  .auth-forms { display:flex; align-items:center; padding:44px 40px; }
+  .auth-card { width:100%; animation:cardIn .35s ease; }
+  @keyframes cardIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+  .step-tag {
+    display:inline-flex; align-items:center; gap:6px; font-size:11px; font-weight:700;
+    color:var(--accent); background:var(--accent-soft); padding:4px 10px; border-radius:999px;
+    letter-spacing:.03em; margin-bottom:16px;
+  }
+  .auth-card h1 { font-size:21px; margin:0 0 6px; font-weight:750; }
+  .auth-card p.sub { margin:0 0 22px; font-size:13px; color:var(--muted); line-height:1.5; }
+  label { display:block; font-size:12px; font-weight:650; color:#374151; margin:16px 0 6px; }
+  .field-wrap { position:relative; }
+  .field-wrap .field-icon {
+    position:absolute; left:12px; top:50%; transform:translateY(-50%); color:#9ca3af;
+    pointer-events:none; display:flex;
+  }
   input[type="email"], input[type="password"], input[type="text"] {
-    width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px;
-    font-size:14px; outline:none; transition:border-color .15s;
+    width:100%; padding:11px 12px 11px 38px; border:1px solid var(--line); border-radius:9px;
+    font-size:14px; outline:none; transition:border-color .15s, box-shadow .15s; background:#fbfbfd;
   }
-  input:focus { border-color:var(--accent); }
-  .otp-input { letter-spacing:.4em; font-size:18px; text-align:center; font-weight:600; }
+  input:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(79,70,229,.14); background:#fff; }
+  .otp-input { letter-spacing:.5em; font-size:19px; text-align:center; font-weight:700; padding-left:12px; }
   .primary-btn {
-    width:100%; margin-top:22px; padding:11px; border:0; border-radius:8px;
-    background:var(--accent); color:#fff; font-size:14px; font-weight:600; cursor:pointer;
+    width:100%; margin-top:22px; padding:12px; border:0; border-radius:9px;
+    background:linear-gradient(135deg, var(--accent), var(--accent-dark)); color:#fff;
+    font-size:14px; font-weight:650; cursor:pointer; transition:filter .15s, transform .1s;
+    display:flex; align-items:center; justify-content:center; gap:8px;
   }
-  .primary-btn:hover { background:var(--accent-dark); }
-  .field-error { min-height:16px; font-size:12px; color:var(--danger); margin-top:6px; }
+  .primary-btn:hover { filter:brightness(1.06); }
+  .primary-btn:active { transform:scale(.98); }
+  .field-error { min-height:16px; font-size:12px; color:var(--danger); margin-top:8px; font-weight:600; }
   .hint-box {
-    margin-top:18px; font-size:12px; color:#475569; line-height:1.5;
-    background:var(--accent-soft); border-radius:8px; padding:10px 12px;
+    margin-top:20px; font-size:12px; color:#475569; line-height:1.55;
+    background:var(--accent-soft); border:1px solid #e0e7ff; border-radius:9px; padding:11px 13px;
+    display:flex; gap:9px; align-items:flex-start;
+  }
+  .hint-box svg { flex-shrink:0; margin-top:1px; color:var(--accent); }
+
+  @media (max-width: 860px) {
+    .auth-pitch { display:none; }
+    .auth-shell { grid-template-columns:1fr; max-width:420px; }
   }
 
   /* ---------- Dashboard shell ---------- */
   #dashboardView { display:none; min-height:100vh; }
   .shell { display:flex; min-height:100vh; }
   .sidebar {
-    width:220px; flex-shrink:0; background:#111827; color:#cbd5e1;
+    width:226px; flex-shrink:0; background:#0f172a; color:#94a3b8;
     padding:20px 14px; display:flex; flex-direction:column; gap:2px;
   }
-  .sidebar .brand { color:#fff; padding:0 8px 20px; margin-bottom:8px; border-bottom:1px solid #1f2937; }
-  .navitem {
-    display:flex; align-items:center; gap:10px; width:100%; text-align:left;
-    padding:10px 12px; border:0; background:transparent; color:#cbd5e1;
-    border-radius:8px; font-size:14px; cursor:pointer;
+  .sidebar .brand {
+    color:#fff; display:flex; align-items:center; gap:10px;
+    padding:2px 8px 20px; margin-bottom:10px; border-bottom:1px solid #1f2937;
   }
-  .navitem:hover { background:#1f2937; color:#fff; }
-  .navitem.active { background:var(--accent); color:#fff; }
-  .navitem .dot { width:6px; height:6px; border-radius:50%; background:currentColor; opacity:.6; }
+  .sidebar .brand-mark {
+    width:34px; height:34px; border-radius:10px;
+    background:linear-gradient(135deg, var(--accent), #7c3aed);
+    display:flex; align-items:center; justify-content:center; color:#fff; flex-shrink:0;
+  }
+  .sidebar .brand-name { font-weight:700; font-size:14.5px; }
+  .navitem {
+    display:flex; align-items:center; gap:11px; width:100%; text-align:left;
+    padding:10px 12px; border:0; background:transparent; color:#94a3b8;
+    border-radius:9px; font-size:13.5px; font-weight:550; cursor:pointer;
+    transition:background .15s, color .15s;
+  }
+  .navitem:hover { background:#1e293b; color:#e2e8f0; }
+  .navitem.active { background:linear-gradient(135deg, var(--accent), #7c3aed); color:#fff; }
+  .nav-icon { display:flex; flex-shrink:0; opacity:.9; }
+  .sidebar-foot {
+    margin-top:auto; padding:12px; font-size:11px; color:#64748b;
+    display:flex; align-items:center; gap:8px;
+  }
+  .sidebar-foot .pulse {
+    width:7px; height:7px; border-radius:50%; background:var(--good); flex-shrink:0;
+    box-shadow:0 0 0 3px rgba(5,150,105,.25);
+  }
 
   .main { flex:1; min-width:0; }
   .topbar {
-    height:60px; background:#fff; border-bottom:1px solid var(--line);
+    height:64px; background:#fff; border-bottom:1px solid var(--line);
     display:flex; align-items:center; justify-content:space-between; padding:0 28px;
+  }
+  .topbar .title-wrap { display:flex; align-items:center; gap:10px; }
+  .topbar strong { font-size:15.5px; }
+  .date-chip {
+    font-size:11px; font-weight:650; color:var(--accent); background:var(--accent-soft);
+    padding:4px 10px; border-radius:999px;
   }
   .topbar .who { display:flex; align-items:center; gap:10px; font-size:13px; color:var(--muted); }
   .avatar {
-    width:32px; height:32px; border-radius:50%; background:var(--accent-soft);
-    color:var(--accent-dark); display:flex; align-items:center; justify-content:center;
-    font-weight:700; font-size:13px;
+    width:33px; height:33px; border-radius:50%;
+    background:linear-gradient(135deg, var(--accent), #7c3aed);
+    color:#fff; display:flex; align-items:center; justify-content:center;
+    font-weight:700; font-size:12.5px;
   }
-  .content { padding:28px; }
-  .content h1 { font-size:20px; margin:0 0 4px; }
+  .content { padding:28px 32px 40px; }
+  .content h1 { font-size:21px; margin:0 0 4px; font-weight:750; }
   .content .sub { color:var(--muted); font-size:13px; margin:0 0 22px; }
 
-  .cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px,1fr)); gap:16px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px,1fr)); gap:16px; margin-bottom:8px; }
   .stat-card {
-    background:#fff; border:1px solid var(--line); border-radius:12px; padding:18px 20px;
+    background:#fff; border:1px solid var(--line); border-radius:13px; padding:18px 20px;
+    position:relative; overflow:hidden;
   }
-  .stat-card .num { font-size:26px; font-weight:700; }
-  .stat-card .label { font-size:12px; color:var(--muted); margin-top:2px; }
+  .stat-card::before {
+    content:''; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--accent-bar, var(--accent));
+  }
+  .stat-card .top-row { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+  .stat-card .ico {
+    width:32px; height:32px; border-radius:9px; display:flex; align-items:center; justify-content:center;
+    background:var(--accent-soft); color:var(--accent);
+  }
+  .stat-card .num { font-size:25px; font-weight:750; line-height:1; }
+  .stat-card .label { font-size:12px; color:var(--muted); margin-top:5px; }
+  .stat-card.pending::before { background:var(--amber); }
+  .stat-card.pending .ico { background:var(--amber-soft); color:var(--amber); }
+  .stat-card.rate::before { background:var(--good); }
+  .stat-card.rate .ico { background:var(--good-soft); color:var(--good); }
+  .progress-track { height:5px; border-radius:999px; background:#f1f5f9; margin-top:10px; overflow:hidden; }
+  .progress-fill { height:100%; border-radius:999px; background:linear-gradient(90deg, var(--good), #10b981); }
 
   /* ---------- Attendance panel ---------- */
   .panel {
-    background:#fff; border:1px solid var(--line); border-radius:12px; overflow:hidden;
+    background:#fff; border:1px solid var(--line); border-radius:14px; overflow:hidden;
+    box-shadow:0 1px 2px rgba(15,23,42,.03);
   }
   .panel-head {
     display:flex; align-items:center; justify-content:space-between;
-    padding:16px 20px; border-bottom:1px solid var(--line);
+    padding:17px 22px; border-bottom:1px solid var(--line);
   }
-  .panel-head h2 { font-size:15px; margin:0; }
-  .panel-head .meta { font-size:12px; color:var(--muted); }
+  .panel-head h2 { font-size:15px; margin:0; font-weight:700; }
+  .panel-head .meta {
+    font-size:11px; color:var(--muted); background:#f8fafc; border:1px solid var(--line);
+    padding:3px 9px; border-radius:999px; font-weight:600;
+  }
   table { width:100%; border-collapse:collapse; }
   thead th {
-    text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.05em;
-    color:var(--muted); padding:10px 20px; background:#f8fafc; border-bottom:1px solid var(--line);
+    text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--muted); padding:11px 22px; background:#f8fafc; border-bottom:1px solid var(--line);
+    position:sticky; top:0;
   }
-  tbody td { padding:12px 20px; border-bottom:1px solid #f1f5f9; font-size:14px; }
-  tbody tr:hover { background:#f8fafc; }
-  .roll { color:var(--muted); font-size:12px; }
-  .student-cell { display:flex; align-items:center; gap:10px; }
+  thead th.check-col { text-align:right; }
+  tbody td { padding:11px 22px; border-bottom:1px solid #f1f5f9; font-size:13.5px; }
+  tbody tr { transition:background .15s; }
+  tbody tr:hover { background:#fafbff; }
+  tbody tr:has(input:checked) { background:var(--good-soft); }
+  tbody tr:has(input:checked):hover { background:#e3faf1; }
+  .roll {
+    color:var(--muted); font-size:11.5px; font-weight:650; background:#f1f5f9;
+    padding:3px 9px; border-radius:6px; display:inline-block;
+  }
+  .student-cell { display:flex; align-items:center; gap:11px; }
   .mini-avatar {
-    width:28px; height:28px; border-radius:50%; background:#e2e8f0; color:#475569;
+    width:29px; height:29px; border-radius:50%; color:#fff;
     display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700;
+    flex-shrink:0;
   }
-  td.check { text-align:center; }
-  input[type="checkbox"] { width:19px; height:19px; accent-color:var(--accent); cursor:pointer; }
-  .panel-foot { padding:16px 20px; display:flex; align-items:center; justify-content:space-between; }
-  .panel-head .actions { display:flex; align-items:center; gap:14px; }
+  td.check { text-align:right; }
+
+  /* Real <input type=checkbox>, restyled as a Present/Absent toggle switch. */
+  #rosterBody input[type="checkbox"] {
+    appearance:none; -webkit-appearance:none; width:46px; height:25px; border-radius:999px;
+    background:#e2e8f0; position:relative; cursor:pointer; outline:none; flex-shrink:0;
+    transition:background .18s ease; vertical-align:middle;
+  }
+  #rosterBody input[type="checkbox"]::after {
+    content:''; position:absolute; top:3px; left:3px; width:19px; height:19px; border-radius:50%;
+    background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.25); transition:left .18s ease;
+  }
+  #rosterBody input[type="checkbox"]:checked { background:var(--good); }
+  #rosterBody input[type="checkbox"]:checked::after { left:24px; }
+  #rosterBody input[type="checkbox"]:focus-visible { box-shadow:0 0 0 3px rgba(79,70,229,.3); }
+
+  .panel-foot { padding:16px 22px; display:flex; align-items:center; justify-content:space-between; }
+  .panel-head .actions { display:flex; align-items:center; gap:16px; }
   .link-btn {
-    background:none; border:0; padding:0; color:var(--accent); font-size:13px;
-    font-weight:600; cursor:pointer;
+    background:none; border:0; padding:0; color:var(--accent); font-size:12.5px;
+    font-weight:650; cursor:pointer; display:flex; align-items:center; gap:5px;
   }
   .link-btn:hover { text-decoration:underline; }
   .banner {
-    display:none; margin:0 20px 16px; padding:12px 16px; border-radius:8px;
-    background:#ecfdf5; color:var(--good); font-size:13px; font-weight:600;
+    display:none; margin:0 22px 18px; padding:13px 16px; border-radius:10px;
+    background:var(--good-soft); border:1px solid #a7f3d0; color:var(--good); font-size:13px;
+    font-weight:650; align-items:center; gap:10px; animation:cardIn .3s ease;
   }
+  .banner.show-flex { display:flex; }
 </style>
 </head>
 <body>
 
   <div id="authGate">
-    <section id="loginView" class="auth-card">
-      <div class="brand"><span class="brand-mark">VP</span><span class="brand-name">Vidyalaya Portal</span></div>
-      <h1>Teacher sign in</h1>
-      <p class="sub">Sign in with your staff account to continue.</p>
-      <label for="loginEmail">Email</label>
-      <input id="loginEmail" type="email" name="email" autocomplete="username" placeholder="you@school.edu">
-      <label for="loginPassword">Password</label>
-      <input id="loginPassword" type="password" name="password" autocomplete="current-password" placeholder="••••••••">
-      <div class="field-error" id="loginError"></div>
-      <button id="signinBtn" class="primary-btn" type="button">Sign in</button>
-      <div class="hint-box">Demo portal &mdash; any email and password are accepted.</div>
-    </section>
+    <div class="auth-shell">
+      <div class="auth-pitch">
+        <div class="rings" aria-hidden="true"></div>
+        <div class="pitch-brand">
+          <span class="pitch-mark" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10 12 5 2 10l10 5 10-5Z"/><path d="M6 12v5c0 1.5 2.5 3 6 3s6-1.5 6-3v-5"/></svg>
+          </span>
+          <strong>Vidyalaya Portal</strong>
+        </div>
+        <div class="pitch-copy">
+          <h2>Attendance,<br>simplified.</h2>
+          <p>One roster, one tap per student, and a record every parent and principal can trust.</p>
+        </div>
+        <div class="pitch-features">
+          <div class="pitch-feature">
+            <span class="ico" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+            Mark a whole class in under a minute
+          </div>
+          <div class="pitch-feature">
+            <span class="ico" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+            Every submission is logged, never silent
+          </div>
+          <div class="pitch-feature">
+            <span class="ico" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+            Built for teachers, not spreadsheets
+          </div>
+        </div>
+      </div>
 
-    <section id="otpView" class="auth-card" hidden>
-      <div class="brand"><span class="brand-mark">VP</span><span class="brand-name">Vidyalaya Portal</span></div>
-      <h1>Verify your identity</h1>
-      <p class="sub">Enter the one-time code sent to your email.</p>
-      <label for="otp">One-time code</label>
-      <input id="otp" class="otp-input" name="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000">
-      <div class="field-error" id="otpError"></div>
-      <button id="verifyBtn" class="primary-btn" type="button">Verify</button>
-      <div class="hint-box">Test mode: the code sent to your email is <strong>123456</strong>.</div>
-    </section>
+      <div class="auth-forms">
+        <section id="loginView" class="auth-card">
+          <span class="step-tag">Step 1 of 2</span>
+          <h1>Teacher sign in</h1>
+          <p class="sub">Sign in with your staff account to continue.</p>
+          <label for="loginEmail">Email</label>
+          <div class="field-wrap">
+            <span class="field-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 6-10 7L2 6"/></svg></span>
+            <input id="loginEmail" type="email" name="email" autocomplete="username" placeholder="you@school.edu">
+          </div>
+          <label for="loginPassword">Password</label>
+          <div class="field-wrap">
+            <span class="field-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+            <input id="loginPassword" type="password" name="password" autocomplete="current-password" placeholder="••••••••">
+          </div>
+          <div class="field-error" id="loginError"></div>
+          <button id="signinBtn" class="primary-btn" type="button">Sign in</button>
+          <div class="hint-box">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+            <span>Demo portal &mdash; any email and password are accepted.</span>
+          </div>
+        </section>
+
+        <section id="otpView" class="auth-card" hidden>
+          <span class="step-tag">Step 2 of 2</span>
+          <h1>Verify your identity</h1>
+          <p class="sub">Enter the one-time code sent to your email.</p>
+          <label for="otp">One-time code</label>
+          <div class="field-wrap">
+            <input id="otp" class="otp-input" name="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" style="padding-left:12px">
+          </div>
+          <div class="field-error" id="otpError"></div>
+          <button id="verifyBtn" class="primary-btn" type="button">Verify</button>
+          <div class="hint-box">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+            <span>Test mode: the code sent to your email is <strong>123456</strong>.</span>
+          </div>
+        </section>
+      </div>
+    </div>
   </div>
 
   <div id="dashboardView">
     <div class="shell">
       <nav class="sidebar">
-        <div class="brand"><span class="brand-mark">VP</span><span class="brand-name">Vidyalaya</span></div>
-        <button class="navitem active" data-view="home" type="button"><span class="dot"></span>Dashboard</button>
-        <button class="navitem" data-view="attendance" type="button"><span class="dot"></span>Mark Attendance</button>
-        <button class="navitem" data-view="students" type="button"><span class="dot"></span>Students</button>
-        <button class="navitem" data-view="timetable" type="button"><span class="dot"></span>Timetable</button>
-        <button class="navitem" data-view="reports" type="button"><span class="dot"></span>Reports</button>
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10 12 5 2 10l10 5 10-5Z"/><path d="M6 12v5c0 1.5 2.5 3 6 3s6-1.5 6-3v-5"/></svg>
+          </span>
+          <span class="brand-name">Vidyalaya</span>
+        </div>
+        <button class="navitem active" data-view="home" type="button">
+          <span class="nav-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M9 22V12h6v10"/></svg></span>
+          Dashboard
+        </button>
+        <button class="navitem" data-view="attendance" type="button">
+          <span class="nav-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="m9 16 2 2 4-4"/></svg></span>
+          Mark Attendance
+        </button>
+        <button class="navitem" data-view="students" type="button">
+          <span class="nav-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+          Students
+        </button>
+        <button class="navitem" data-view="timetable" type="button">
+          <span class="nav-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span>
+          Timetable
+        </button>
+        <button class="navitem" data-view="reports" type="button">
+          <span class="nav-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-3"/></svg></span>
+          Reports
+        </button>
+        <div class="sidebar-foot"><span class="pulse" aria-hidden="true"></span>Synced just now</div>
       </nav>
 
       <div class="main">
         <div class="topbar">
-          <strong id="pageTitle">Dashboard</strong>
+          <div class="title-wrap">
+            <strong id="pageTitle">Dashboard</strong>
+            <span class="date-chip">Term II</span>
+          </div>
           <div class="who"><span class="avatar">TC</span>Ms. Teacher &middot; Class X-A</div>
         </div>
 
@@ -179,17 +367,41 @@
             <h1>Welcome back</h1>
             <p class="sub">Here's what's happening in Class X-A today.</p>
             <div class="cards">
-              <div class="stat-card"><div class="num">14</div><div class="label">Students enrolled</div></div>
-              <div class="stat-card"><div class="num">1</div><div class="label">Class today</div></div>
-              <div class="stat-card"><div class="num">Pending</div><div class="label">Today's attendance</div></div>
-              <div class="stat-card"><div class="num">92%</div><div class="label">Attendance this month</div></div>
+              <div class="stat-card">
+                <div class="top-row">
+                  <span class="ico" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></span>
+                </div>
+                <div class="num">14</div><div class="label">Students enrolled</div>
+              </div>
+              <div class="stat-card">
+                <div class="top-row">
+                  <span class="ico" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span>
+                </div>
+                <div class="num">1</div><div class="label">Class today</div>
+              </div>
+              <div class="stat-card pending">
+                <div class="top-row">
+                  <span class="ico" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></span>
+                </div>
+                <div class="num">Pending</div><div class="label">Today's attendance</div>
+              </div>
+              <div class="stat-card rate">
+                <div class="top-row">
+                  <span class="ico" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-3"/></svg></span>
+                </div>
+                <div class="num">92%</div><div class="label">Attendance this month</div>
+                <div class="progress-track"><div class="progress-fill" style="width:92%"></div></div>
+              </div>
             </div>
           </section>
 
           <section id="view-attendance" hidden>
             <h1>Mark Attendance</h1>
             <p class="sub">Class X-A &middot; <span id="todayLabel"></span></p>
-            <div class="banner" id="submittedBanner">Attendance submitted successfully.</div>
+            <div class="banner" id="submittedBanner">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+              Attendance submitted successfully.
+            </div>
             <div class="panel">
               <div class="panel-head">
                 <h2>Student roster</h2>
@@ -201,12 +413,12 @@
               </div>
               <form id="attendanceForm">
                 <table>
-                  <thead><tr><th>Student</th><th>Roll no.</th><th style="text-align:center;">Present</th></tr></thead>
+                  <thead><tr><th>Student</th><th>Roll no.</th><th class="check-col">Present</th></tr></thead>
                   <tbody id="rosterBody"></tbody>
                 </table>
                 <div class="panel-foot">
                   <span class="meta">Unchecked students are marked absent.</span>
-                  <button id="submitBtn" class="primary-btn" style="width:auto; padding:10px 22px;" type="submit">Submit Attendance</button>
+                  <button id="submitBtn" class="primary-btn" style="width:auto; padding:10px 22px; margin-top:0;" type="submit">Submit Attendance</button>
                 </div>
               </form>
             </div>
@@ -237,6 +449,7 @@
     'Meera Iyer', 'Nikhil Sharma', 'Nikhil Verma', 'Priya Singh', 'Rohan Gupta',
     'Sara Khan', 'Tanvi Joshi', 'Vikram Desai', 'Yash Malhotra',
   ];
+  var AVATAR_COLORS = ['#4f46e5', '#7c3aed', '#0891b2', '#059669', '#d97706', '#dc2626', '#2563eb'];
 
   function initials(name) {
     var parts = name.split(' ');
@@ -253,6 +466,7 @@
       wrap.className = 'student-cell';
       var av = document.createElement('span');
       av.className = 'mini-avatar';
+      av.style.background = AVATAR_COLORS[i % AVATAR_COLORS.length];
       av.textContent = initials(name);
       var nameSpan = document.createElement('span');
       nameSpan.textContent = name;
@@ -262,8 +476,10 @@
       tr.appendChild(tdName);
 
       var tdRoll = document.createElement('td');
-      tdRoll.className = 'roll';
-      tdRoll.textContent = 'R' + String(101 + i);
+      var rollTag = document.createElement('span');
+      rollTag.className = 'roll';
+      rollTag.textContent = 'R' + String(101 + i);
+      tdRoll.appendChild(rollTag);
       tr.appendChild(tdRoll);
 
       var tdCheck = document.createElement('td');
@@ -343,7 +559,7 @@
 
   document.getElementById('attendanceForm').addEventListener('submit', function (e) {
     e.preventDefault();
-    document.getElementById('submittedBanner').style.display = 'block';
+    document.getElementById('submittedBanner').classList.add('show-flex');
     document.getElementById('submitBtn').disabled = true;
     Array.prototype.forEach.call(
       document.querySelectorAll('#rosterBody input[type="checkbox"]'),

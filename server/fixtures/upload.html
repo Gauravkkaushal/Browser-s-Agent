@@ -1,31 +1,100 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>Assignment upload - fixture</title>
+<head>
+<meta charset="utf-8">
+<title>Assignment upload - fixture</title>
 <style>
-body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;padding:40px;background:#f6f7f9;color:#111}
-.card{max-width:520px;background:#fff;border:1px solid #e3e6ea;border-radius:10px;padding:26px 30px}
-h1{font-size:19px;margin:0 0 6px}.sub{color:#667;font-size:13px;margin-bottom:20px}
-label{display:block;font-size:12px;color:#556;margin:16px 0 6px;font-weight:600}
-input[type=file]{display:block;width:100%;padding:9px;border:1px dashed #b9c1ca;border-radius:7px;background:#fbfcfd}
-input[type=text]{width:100%;padding:9px 11px;border:1px solid #d5dae0;border-radius:6px;box-sizing:border-box}
-button{margin-top:20px;width:100%;padding:12px;border:0;border-radius:8px;background:#0f766e;color:#fff;font-size:15px;font-weight:600;cursor:pointer}
-#out{margin-top:18px;padding:12px;border-radius:7px;background:#eef6f3;border:1px solid #a9d6c8;font-size:13px;display:none}
-</style></head>
-<body><div class="card">
-  <h1>Submit assignment</h1>
-  <div class="sub">Fixture for the file-upload path. Nothing leaves this machine.</div>
-  <label for="title">Submission title</label>
-  <input id="title" type="text" name="title" placeholder="Week 5 report">
-  <label for="file">Attach your file</label>
-  <input id="file" type="file" name="submission">
-  <button id="send" type="button">Submit assignment</button>
-  <div id="out"></div>
-</div>
+  :root { --ink:#0f172a; --muted:#64748b; --line:#e3e6ea; --bg:#f6f7f9; --accent:#0f766e; --accent-dark:#0d5f59; --accent-soft:#ecfdf5; }
+  * { box-sizing:border-box; }
+  body { font-family:system-ui,-apple-system,'Segoe UI',sans-serif; padding:44px 20px; background:var(--bg); color:var(--ink); }
+  svg { display:block; }
+  .card { max-width:480px; margin:0 auto; background:#fff; border:1px solid var(--line); border-radius:14px; padding:28px 30px 30px;
+          box-shadow:0 14px 36px rgba(15,23,42,.06); }
+  .head-row { display:flex; align-items:center; gap:12px; margin-bottom:4px; }
+  .head-mark {
+    width:38px; height:38px; border-radius:10px; background:linear-gradient(135deg, var(--accent), var(--accent-dark));
+    color:#fff; display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  }
+  h1 { font-size:19px; margin:0; font-weight:750; }
+  .sub { color:var(--muted); font-size:12.5px; margin:4px 0 22px; }
+
+  label { display:flex; align-items:center; gap:6px; font-size:12px; color:#475569; margin:16px 0 6px; font-weight:650; }
+  input[type=text] {
+    width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; box-sizing:border-box;
+    font-size:14px; outline:none; transition:border-color .15s, box-shadow .15s;
+  }
+  input[type=text]:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(15,118,110,.14); }
+
+  .drop-label {
+    display:flex; align-items:center; gap:11px; padding:12px 14px; border:1.5px dashed #b9c1ca; border-radius:10px;
+    background:#fbfcfd; margin-bottom:2px;
+  }
+  .drop-ico {
+    width:34px; height:34px; border-radius:9px; background:var(--accent-soft); color:var(--accent);
+    display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  }
+  .drop-text { font-size:12px; color:var(--muted); line-height:1.4; }
+  .drop-text strong { color:var(--ink); font-weight:650; }
+  input[type=file] {
+    display:block; width:100%; padding:9px; border:1px dashed #b9c1ca; border-radius:7px; background:#fbfcfd;
+    font-size:12.5px; color:var(--muted);
+  }
+  input[type=file]::file-selector-button {
+    padding:7px 13px; margin-right:11px; border:0; border-radius:7px; background:var(--accent); color:#fff;
+    font-size:12.5px; font-weight:650; cursor:pointer;
+  }
+  input[type=file]::file-selector-button:hover { background:var(--accent-dark); }
+
+  button#send {
+    margin-top:20px; width:100%; padding:12px; border:0; border-radius:9px;
+    background:linear-gradient(135deg, var(--accent), var(--accent-dark)); color:#fff; font-size:14.5px; font-weight:650;
+    cursor:pointer; display:flex; align-items:center; justify-content:center; gap:8px; transition:filter .15s, transform .1s;
+  }
+  button#send:hover { filter:brightness(1.06); }
+  button#send:active { transform:scale(.98); }
+
+  #out {
+    margin-top:18px; padding:13px 15px; border-radius:9px; background:var(--accent-soft); border:1px solid #a9d6c8;
+    font-size:12.5px; display:none; align-items:flex-start; gap:10px; line-height:1.5; color:#065f46;
+    animation:outIn .3s ease;
+  }
+  @keyframes outIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
+  #out svg { flex-shrink:0; margin-top:1px; color:#059669; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="head-row">
+      <span class="head-mark" aria-hidden="true">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M12 18v-6M9 15l3-3 3 3"/></svg>
+      </span>
+      <h1>Submit assignment</h1>
+    </div>
+    <div class="sub">Fixture for the file-upload path. Nothing leaves this machine.</div>
+
+    <label for="title">Submission title</label>
+    <input id="title" type="text" name="title" placeholder="Week 5 report">
+
+    <label for="file" style="margin-top:18px;">Attach your file</label>
+    <div class="drop-label">
+      <span class="drop-ico" aria-hidden="true">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5M12 3v12"/></svg>
+      </span>
+      <span class="drop-text"><strong>Choose a file</strong> or drop it on the picker below</span>
+    </div>
+    <input id="file" type="file" name="submission">
+
+    <button id="send" type="button">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+      Submit assignment
+    </button>
+    <div id="out"></div>
+  </div>
 <script>
 document.getElementById('send').addEventListener('click', function () {
   var f = document.getElementById('file').files[0];
   var o = document.getElementById('out');
-  o.style.display = 'block';
+  o.style.display = 'flex';
   o.textContent = f ? ('Received "' + f.name + '" (' + f.size + ' bytes) titled "' +
       (document.getElementById('title').value || 'untitled') + '"') : 'No file attached.';
   document.title = f ? 'Submission received - fixture' : 'Assignment upload - fixture';
