@@ -4,10 +4,13 @@ export type ReasonStatus = 'idle' | 'thinking' | 'ready' | 'error'
 
 export type ReasoningEngine = 'auto' | 'onnx' | 'server'
 
+export type SummaryLanguage = 'en' | 'hi'
+
 export type UserSettings = {
   reasoningEngine: ReasoningEngine
   serverUrl: string
   privacyMode: PrivacyMode
+  summaryLanguage: SummaryLanguage
 }
 
 export type SensitiveRegion = {

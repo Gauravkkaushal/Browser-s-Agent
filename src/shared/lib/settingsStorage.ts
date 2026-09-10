@@ -4,6 +4,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
   reasoningEngine: 'auto',
   serverUrl: 'http://localhost:8787/reason',
   privacyMode: 'balanced',
+  summaryLanguage: 'en',
 }
 
 const STORAGE_KEY = 'netrashield_user_settings'
@@ -33,6 +34,7 @@ export async function loadSettings(): Promise<UserSettings> {
               reasoningEngine: (items.reasoningEngine as UserSettings['reasoningEngine']) || DEFAULT_SETTINGS.reasoningEngine,
               serverUrl: (items.serverUrl as string) || DEFAULT_SETTINGS.serverUrl,
               privacyMode: (items.privacyMode as UserSettings['privacyMode']) || DEFAULT_SETTINGS.privacyMode,
+              summaryLanguage: (items.summaryLanguage as UserSettings['summaryLanguage']) || DEFAULT_SETTINGS.summaryLanguage,
             })
           } else {
             resolve(DEFAULT_SETTINGS)
