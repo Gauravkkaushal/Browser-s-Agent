@@ -862,3 +862,120 @@ html.detached .chat-popup {
   color: #6ee7b7;
   transform: translateY(-1px);
 }
+
+/* ============================================================
+   SPEECH-TO-TEXT — mic button, listening ring, voice indicator
+   ============================================================ */
+
+/* ---- Keyframe: pulsing ring that breathes while mic is active ------------ */
+@keyframes mic-pulse {
+  0%   { box-shadow: 0 0 0 0   rgba(239, 68, 68, 0.70); }
+  60%  { box-shadow: 0 0 0 7px rgba(239, 68, 68, 0.00); }
+  100% { box-shadow: 0 0 0 0   rgba(239, 68, 68, 0.00); }
+}
+
+/* ---- Keyframe: dot blink inside the voice-indicator badge ---------------- */
+@keyframes voice-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.25; }
+}
+
+/* ---- Mic button — idle state -------------------------------------------- */
+.mic-button.ant-btn {
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  background: rgba(30, 41, 59, 0.6);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+}
+
+.mic-button.ant-btn:hover:not(:disabled) {
+  color: #818cf8 !important;
+  border-color: #818cf8 !important;
+  background: rgba(129, 140, 248, 0.12) !important;
+}
+
+/* ---- Mic button — actively listening state ------------------------------- */
+.mic-button--listening.ant-btn,
+.mic-button--listening.ant-btn:hover {
+  color: #f87171 !important;
+  border-color: rgba(239, 68, 68, 0.6) !important;
+  background: rgba(239, 68, 68, 0.12) !important;
+  animation: mic-pulse 1.2s ease-out infinite;
+}
+
+/* ---- Mic button — browser doesn't support STT ---------------------------- */
+.mic-button--unsupported.ant-btn,
+.mic-button--unsupported.ant-btn:hover {
+  color: #475569 !important;
+  border-color: rgba(71, 85, 105, 0.25) !important;
+  background: transparent !important;
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* ---- Voice indicator badge (shown above composer while listening) --------- */
+.voice-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 2px 6px;
+  padding: 5px 10px;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 8px;
+  background: rgba(127, 29, 29, 0.25);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  min-height: 28px;
+  overflow: hidden;
+}
+
+/* Blinking red dot */
+.voice-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ef4444;
+  animation: voice-blink 1s ease-in-out infinite;
+}
+
+.voice-label {
+  color: #fca5a5;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Live interim transcript preview — truncated, italicised */
+.voice-interim {
+  color: #fde68a;
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+/* ---- Textarea border glow while mic is active ---------------------------- */
+.composer-input--listening .ant-input,
+.composer-input--listening textarea {
+  border-color: rgba(239, 68, 68, 0.5) !important;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.18) !important;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+/* ---- Voice error toast --------------------------------------------------- */
+.voice-error {
+  margin: 0 2px 6px;
+  padding: 6px 10px;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 8px;
+  background: rgba(127, 29, 29, 0.35);
+  color: #fca5a5;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  animation: voice-blink 0.5s ease-in-out 2;
+}
+

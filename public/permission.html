@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NetraShield — Allow Microphone Access</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background: radial-gradient(circle at top, #181926 0%, #0d0e15 100%);
+      color: #f0f3f8;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: rgba(26, 27, 38, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 20px;
+      padding: 40px 36px;
+      max-width: 480px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), 0 0 40px rgba(99, 102, 241, 0.1);
+      backdrop-filter: blur(16px);
+    }
+    .icon-wrap {
+      width: 80px;
+      height: 80px;
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(168, 85, 247, 0.2));
+      border: 1px solid rgba(168, 85, 247, 0.3);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 24px;
+      font-size: 36px;
+      box-shadow: 0 0 25px rgba(99, 102, 241, 0.3);
+      animation: pulse 2.5s infinite ease-in-out;
+    }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); box-shadow: 0 0 25px rgba(99, 102, 241, 0.3); }
+      50% { transform: scale(1.05); box-shadow: 0 0 35px rgba(168, 85, 247, 0.5); }
+    }
+    h1 {
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 12px;
+      background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    p {
+      font-size: 14px;
+      line-height: 1.6;
+      color: #94a3b8;
+      margin-bottom: 28px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+      color: #ffffff;
+      border: none;
+      padding: 14px 28px;
+      font-size: 15px;
+      font-weight: 600;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+      width: 100%;
+    }
+    .btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(99, 102, 241, 0.6);
+    }
+    .btn:active {
+      transform: translateY(0);
+    }
+    .status {
+      margin-top: 20px;
+      padding: 12px 16px;
+      border-radius: 10px;
+      font-size: 13px;
+      display: none;
+      line-height: 1.5;
+    }
+    .status.success {
+      display: block;
+      background: rgba(34, 197, 94, 0.15);
+      border: 1px solid rgba(34, 197, 94, 0.3);
+      color: #4ade80;
+    }
+    .status.error {
+      display: block;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #f87171;
+    }
+    .instructions {
+      margin-top: 24px;
+      font-size: 12px;
+      color: #64748b;
+      text-align: left;
+      background: rgba(15, 23, 42, 0.4);
+      border-radius: 8px;
+      padding: 12px 16px;
+    }
+    .instructions ol {
+      padding-left: 18px;
+      margin-top: 6px;
+    }
+    .instructions li {
+      margin-bottom: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon-wrap" id="iconWrap">🎤</div>
+    <h1>Allow Microphone</h1>
+    <p>
+      Chrome requires permissions to be granted on a tab before extension popups can use voice input. Click below and select <strong>"Allow"</strong> when prompted.
+    </p>
+
+    <button id="grantBtn" class="btn">
+      <span>Allow Microphone Access</span>
+    </button>
+
+    <div id="statusBox" class="status"></div>
+
+    <div class="instructions">
+      <strong>Why this is needed:</strong>
+      <ol>
+        <li>Chrome does not allow permission popups inside extension windows.</li>
+        <li>Granting permission here unlocks Hindi, Hinglish & English voice input for NetraShield permanently.</li>
+      </ol>
+    </div>
+  </div>
+
+  <script>
+    const grantBtn = document.getElementById('grantBtn');
+    const statusBox = document.getElementById('statusBox');
+    const iconWrap = document.getElementById('iconWrap');
+
+    async function requestMic() {
+      grantBtn.disabled = true;
+      grantBtn.innerText = 'Requesting permission...';
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // Stop audio tracks immediately
+        stream.getTracks().forEach(t => t.stop());
+
+        iconWrap.innerText = '✅';
+        iconWrap.style.background = 'rgba(34, 197, 94, 0.2)';
+        iconWrap.style.borderColor = 'rgba(34, 197, 94, 0.4)';
+        grantBtn.style.display = 'none';
+
+        statusBox.className = 'status success';
+        statusBox.innerHTML = '<strong>Success!</strong> Microphone permission granted. This tab will close in 2 seconds, or you can switch back to the extension popup.';
+
+        setTimeout(() => {
+          window.close();
+        }, 2200);
+      } catch (err) {
+        grantBtn.disabled = false;
+        grantBtn.innerText = 'Try Again';
+        statusBox.className = 'status error';
+        statusBox.innerHTML = '<strong>Permission Denied or Blocked.</strong><br/>Please click the camera/mic icon in Chrome\\'s address bar above to allow access, then click Try Again.';
+      }
+    }
+
+    grantBtn.addEventListener('click', requestMic);
+
+    // Auto-trigger on page load if allowed
+    window.addEventListener('load', () => {
+      // Small timeout to allow render
+      setTimeout(() => {
+        navigator.mediaDevices.getUserMedia({ audio: true })
+          .then((stream) => {
+            stream.getTracks().forEach(t => t.stop());
+            iconWrap.innerText = '✅';
+            grantBtn.style.display = 'none';
+            statusBox.className = 'status success';
+            statusBox.innerHTML = '<strong>Microphone is already allowed!</strong> You can now use voice commands in NetraShield.';
+            setTimeout(() => window.close(), 1800);
+          })
+          .catch(() => {
+            // Needs user gesture or click
+          });
+      }, 300);
+    });
+  </script>
+</body>
+</html>

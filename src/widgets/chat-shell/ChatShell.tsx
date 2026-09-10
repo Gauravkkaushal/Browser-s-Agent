@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
-import { ArrowUpOutlined, PlusOutlined, SettingOutlined } from '@ant-design/icons'
-import { Button, Input, Select, Typography } from 'antd'
+import { ArrowUpOutlined, AudioMutedOutlined, AudioOutlined, PlusOutlined, SettingOutlined } from '@ant-design/icons'
+import { Button, Input, Select, Tooltip, Typography } from 'antd'
 import type { ChatHistoryThread, ChatMessage, MaskingReport, PendingConfirmation } from '../../features/agent-runner/model'
 import { privacyModes } from '../../entities/mode/model'
 import type { PrivacyMode } from '../../shared/types/netrashield'
+import { openMicrophonePermissionTab, useSpeechToText } from '../../shared/lib/useSpeechToText'
 import { SettingsDrawer } from '../settings/SettingsDrawer'
 import './ChatShell.css'
 
@@ -70,6 +71,27 @@ export function ChatShell({
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [shieldOpen, setShieldOpen] = useState(false)
   const [activePanel, setActivePanel] = useState<'chat' | 'details' | 'history'>('chat')
+  const [voiceError, setVoiceError] = useState<string | null>(null)
+
+  // ---- Speech-to-Text ---------------------------------------------------
+  // The hook handles Hindi, Hinglish, and English in a single pass.
+  // Interim results appear in the composer live; on final the transcript
+  // is appended to whatever the user had already typed.
+  const stt = useSpeechToText({
+    onInterim: (_text) => {
+      // Interim is shown via stt.interimText — no state change needed here.
+    },
+    onFinal: (text) => {
+      // Append final transcript to existing task (with a space separator).
+      onTaskChange(
+        (task.trim() ? task.trim() + ' ' : '') + text
+      )
+    },
+    onError: (msg) => {
+      setVoiceError(msg)
+      setTimeout(() => setVoiceError(null), 6000)
+    },
+  })
 
   /**
    * Keep the newest line in view, the way every chat does.
@@ -433,19 +455,82 @@ export function ChatShell({
       )}
 
       {activePanel === 'chat' && <form className="composer" onSubmit={handleSubmit}>
+        {/* Live voice indicator shown above composer when mic is active */}
+        {stt.status === 'listening' && (
+          <div className="voice-indicator" aria-live="polite" aria-label="Listening for voice command">
+            <span className="voice-dot" />
+            <span className="voice-label">Listening…</span>
+            {stt.interimText && (
+              <span className="voice-interim">{stt.interimText}</span>
+            )}
+          </div>
+        )}
+
+        {/* Error toast from mic (denied, no-speech, etc.) */}
+        {voiceError && (
+          <div
+            className="voice-error"
+            role="alert"
+            onClick={openMicrophonePermissionTab}
+            title="Click to open microphone setup page"
+            style={{ cursor: 'pointer' }}
+          >
+            {voiceError}
+          </div>
+        )}
+
         <Input.TextArea
           aria-label="Ask NetraShield"
           autoSize={{ minRows: 1, maxRows: 4 }}
-          className="composer-input"
+          className={`composer-input${stt.status === 'listening' ? ' composer-input--listening' : ''}`}
           maxLength={240}
           onChange={(event) => onTaskChange(event.target.value)}
           onKeyDown={handleComposerKeyDown}
-          placeholder="Ask NetraShield to inspect, explain, or guide..."
-          value={task}
+          placeholder={
+            stt.status === 'listening'
+              ? 'Bol do… Hindi, Hinglish ya English mein'
+              : 'Ask NetraShield to inspect, explain, or guide...'
+          }
+          value={stt.status === 'listening' && stt.interimText
+            ? (task.trim() ? task.trim() + ' ' : '') + stt.interimText
+            : task
+          }
         />
         <div className="composer-actions">
           <div className="composer-tools">
             <Button className="context-button" icon={<PlusOutlined />} shape="circle" type="text" aria-label="Add context" />
+
+            {/* ---- Microphone button ---- */}
+            <Tooltip
+              title={
+                !stt.isSupported
+                  ? 'Voice input not supported in this browser'
+                  : stt.status === 'listening'
+                  ? 'Click to stop listening'
+                  : 'Voice input — Hindi, Hinglish or English'
+              }
+            >
+              <Button
+                id="voice-input-btn"
+                aria-label={stt.status === 'listening' ? 'Stop voice input' : 'Start voice input'}
+                aria-pressed={stt.status === 'listening'}
+                className={`mic-button${
+                  !stt.isSupported ? ' mic-button--unsupported' : ''
+                }${
+                  stt.status === 'listening' ? ' mic-button--listening' : ''
+                }`}
+                disabled={!stt.isSupported || isRunning}
+                icon={
+                  !stt.isSupported
+                    ? <AudioMutedOutlined />
+                    : <AudioOutlined />
+                }
+                onClick={stt.toggle}
+                shape="circle"
+                type="text"
+              />
+            </Tooltip>
+
             <Button
               aria-label="Open Settings"
               className="settings-button"

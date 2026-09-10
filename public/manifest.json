@@ -44,7 +44,8 @@
     "webNavigation",
     "notifications",
     "debugger",
-    "downloads"
+    "downloads",
+    "microphone"
   ],
   "host_permissions": [
     "<all_urls>"
