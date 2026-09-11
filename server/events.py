@@ -8,7 +8,9 @@ trustworthy: there is no other way for text to reach the screen.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -17,6 +19,34 @@ from .schemas import Envelope, now_iso
 
 # Screenshots are huge; keep them out of the audit file but leave a marker.
 _HEAVY_KEYS = ("screenshot",)
+
+# ---------------------------------------------------------------------------
+# Hash chain: each audit line carries the SHA-256 of the previous line's hash
+# plus its own contents, the way a append-only ledger does. Tampering with or
+# deleting a past line breaks every hash after it -- a reader does not have to
+# trust the file, they can verify it (see verify_audit_chain below).
+# ---------------------------------------------------------------------------
+GENESIS_HASH = "0" * 64
+_chain_lock = threading.Lock()
+_last_hash: Dict[str, str] = {}
+
+
+def _load_last_hash(task_id: str) -> str:
+    """Resume a chain that already has lines on disk (server restart mid-task)."""
+    path = AUDIT_DIR / (task_id + ".jsonl")
+    if not path.exists():
+        return GENESIS_HASH
+    try:
+        last_line = None
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                if line.strip():
+                    last_line = line
+        if not last_line:
+            return GENESIS_HASH
+        return str(json.loads(last_line).get("audit_hash") or GENESIS_HASH)
+    except (OSError, ValueError):
+        return GENESIS_HASH
 
 
 class EventBus:
@@ -116,16 +146,65 @@ def _strip_heavy(obj: Any) -> Any:
 
 
 def _append_audit(task_id: str, env: Dict[str, Any]) -> None:
+    stripped = _strip_heavy(env)
     path: Path = AUDIT_DIR / (task_id + ".jsonl")
+    with _chain_lock:
+        prev = _last_hash.get(task_id)
+        if prev is None:
+            prev = _load_last_hash(task_id)
+        # Canonical (sorted-key) encoding so the hash is stable regardless of
+        # dict insertion order, then chain it onto the previous line's hash.
+        canonical = json.dumps(stripped, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256((prev + canonical).encode("utf-8")).hexdigest()
+        stripped["audit_prev_hash"] = prev
+        stripped["audit_hash"] = digest
+        _last_hash[task_id] = digest
     try:
         with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(_strip_heavy(env), ensure_ascii=False) + "\n")
+            fh.write(json.dumps(stripped, ensure_ascii=False) + "\n")
     except OSError:
         pass
 
 
 def audit_path(task_id: str) -> Path:
     return AUDIT_DIR / (task_id + ".jsonl")
+
+
+def verify_audit_chain(task_id: str) -> Dict[str, Any]:
+    """Re-walk a task's audit file and recompute every hash from scratch.
+
+    Returns ok=True only if every line's stored hash matches what its own
+    content plus the previous line's hash actually produces -- proof the file
+    was not edited or reordered after the fact, not just an assertion that it
+    wasn't.
+    """
+    path = AUDIT_DIR / (task_id + ".jsonl")
+    if not path.exists():
+        return {"ok": False, "lines": 0, "error": "no audit file for %s" % task_id}
+
+    prev = GENESIS_HASH
+    lines_checked = 0
+    for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            env = json.loads(line)
+        except json.JSONDecodeError:
+            return {"ok": False, "lines": lines_checked, "error": "line %d is not valid JSON" % i}
+        stored_hash = env.pop("audit_hash", None)
+        stored_prev = env.pop("audit_prev_hash", None)
+        if stored_hash is None:
+            return {"ok": False, "lines": lines_checked, "error": "line %d has no audit_hash" % i}
+        if stored_prev != prev:
+            return {"ok": False, "lines": lines_checked,
+                    "error": "line %d's prev_hash does not chain from line %d" % (i, i - 1)}
+        canonical = json.dumps(env, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        recomputed = hashlib.sha256((prev + canonical).encode("utf-8")).hexdigest()
+        if recomputed != stored_hash:
+            return {"ok": False, "lines": lines_checked, "error": "line %d's hash does not match its content" % i}
+        prev = stored_hash
+        lines_checked += 1
+    return {"ok": True, "lines": lines_checked, "head_hash": prev}
 
 
 bus = EventBus()

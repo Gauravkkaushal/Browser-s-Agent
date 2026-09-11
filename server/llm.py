@@ -358,19 +358,24 @@ class Ollama(Provider):
 
     async def complete(self, role: str, system: str, user: str,
                        image_b64: str = "") -> Tuple[str, str]:
-        if image_b64:
-            raise ModelError("the local ollama rung does not take images here")
-        body = {
-            "model": config.OLLAMA_MODEL,
+        # Ollama's /api/generate takes raw base64 in "images" (no data: URI
+        # prefix) and routes to whichever locally-pulled model was named --
+        # a small quantized VLM (moondream, llava, bakllava, minicpm-v) reads
+        # the picture; a text model would silently ignore the field.
+        model = config.OLLAMA_VISION_MODEL if image_b64 else config.OLLAMA_MODEL
+        body: Dict[str, Any] = {
+            "model": model,
             "prompt": system + "\n\n" + user + "\n\nReturn JSON only.",
             "stream": False,
             "format": "json",
         }
+        if image_b64:
+            body["images"] = [image_b64.split(",", 1)[-1]]
         res = await client().post(config.OLLAMA_HOST.rstrip("/") + "/api/generate",
                                   json=body)
         res.raise_for_status()
         data = res.json()
-        return data.get("response", "{}"), config.OLLAMA_MODEL
+        return data.get("response", "{}"), model
 
 
 def _build_chain() -> List[Provider]:

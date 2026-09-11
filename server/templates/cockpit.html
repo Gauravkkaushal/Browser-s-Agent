@@ -102,6 +102,8 @@
   .stat.pii .stat-value { color:var(--warn); }
   .stat.steps .stat-value { color:var(--accent); }
   .stat.elapsed .stat-value { color:var(--text); }
+  .stat.ondevice .stat-value { color:var(--ok, #3ecf8e); }
+  .stat.latency .stat-value { color:var(--text); }
 
   main { flex:1; display:grid; grid-template-columns:1.35fr 1fr; min-height:0; }
   .col { display:flex; flex-direction:column; min-height:0; border-right:1px solid var(--line); }
@@ -203,6 +205,7 @@
          autocomplete="off">
   <button class="primary" id="run">Run</button>
   <button class="danger" id="cancel" disabled>Cancel</button>
+  <button class="ghost" id="compliance" disabled title="A DPDP Act 2023 technical-controls report built from this task's real audit trail">Compliance report</button>
 </div>
 
 <div class="optbar">
@@ -236,6 +239,11 @@
   <div class="stat steps"><div class="stat-label">Steps</div><div class="stat-value" id="s-steps">0</div></div>
   <div class="stat pii"><div class="stat-label">PII redacted</div><div class="stat-value" id="s-pii">0</div></div>
   <div class="stat elapsed"><div class="stat-label">Elapsed</div><div class="stat-value" id="s-elapsed">0s</div></div>
+  <div class="stat ondevice"><div class="stat-label">On-device</div><div class="stat-value" id="s-ondevice">0%</div></div>
+  <div class="stat latency"><div class="stat-label">Last inference</div><div class="stat-value" id="s-latency">--</div></div>
+</div>
+<div class="perception-line" id="perception-line" style="font-size:12px;color:#8892a4;padding:2px 4px 10px">
+  no inference yet
 </div>
 
 <main>
@@ -297,7 +305,7 @@
     RECOVERY_COMPLETED:'warn', LOGIN_REQUIRED:'warn', LOGIN_DETECTED:'ok',
     TASK_COMPLETED:'ok', TASK_FAILED:'bad', TASK_CANCELLED:'warn',
     MODEL_CALL_COMPLETED:'hi', WS_CONNECTED:'ok', WS_DISCONNECTED:'bad',
-    ERROR:'bad', STATE_CHANGED:'dim'
+    ERROR:'bad', STATE_CHANGED:'dim', REDACTION_VERIFY_FAILED:'bad'
   };
 
   /* ---- pipeline visualizer: event type -> stage ---- */
@@ -333,9 +341,26 @@
     pipelineEl.classList.remove('recovering');
   }
 
-  /* ---- stat strip: steps, PII redacted, elapsed -- all derived from real event data ---- */
-  var stats = { steps:0, pii:0, taskStartTs:null, lastTs:null };
-  function resetStats() { stats = { steps:0, pii:0, taskStartTs:null, lastTs:null }; renderStats(); }
+  /* ---- stat strip: steps, PII redacted, elapsed -- all derived from real event data ----
+     On-device %% and last-inference come the same way: MODEL_CALL_COMPLETED carries the
+     real provider/model/latency for every reasoner call (including the local Ollama
+     rung), and ACTION_PROPOSED carries perception_source for the Chrome-Nano bridge
+     tier, which never touches llm.py and so never emits a MODEL_CALL_COMPLETED. */
+  var stats = {
+    steps:0, pii:0, taskStartTs:null, lastTs:null,
+    localSteps:0, cloudSteps:0, lastPayloadBytes:0,
+    lastReasonerProvider:'', lastReasonerModel:'', lastReasonerLatency:0, lastReasonerVision:false,
+    lastOcrMs:null, lastOcrRegions:0, lastVisualMs:null, lastVisualScores:0
+  };
+  function resetStats() {
+    stats = {
+      steps:0, pii:0, taskStartTs:null, lastTs:null,
+      localSteps:0, cloudSteps:0, lastPayloadBytes:0,
+      lastReasonerProvider:'', lastReasonerModel:'', lastReasonerLatency:0, lastReasonerVision:false,
+      lastOcrMs:null, lastOcrRegions:0, lastVisualMs:null, lastVisualScores:0
+    };
+    renderStats();
+  }
   function formatElapsed(ms) {
     if (!ms || ms < 0) return '0s';
     var s = Math.round(ms / 1000);
@@ -347,6 +372,39 @@
     document.getElementById('s-pii').textContent = String(stats.pii);
     document.getElementById('s-elapsed').textContent =
       (stats.taskStartTs && stats.lastTs) ? formatElapsed(stats.lastTs - stats.taskStartTs) : '0s';
+
+    var total = stats.localSteps + stats.cloudSteps;
+    document.getElementById('s-ondevice').textContent =
+      total ? Math.round((stats.localSteps / total) * 100) + '%' : '0%';
+
+    var latEl = document.getElementById('s-latency');
+    latEl.textContent = stats.lastReasonerLatency ? Math.round(stats.lastReasonerLatency) + 'ms' : '--';
+
+    var lineEl = document.getElementById('perception-line');
+    var line;
+    if (stats.lastReasonerProvider) {
+      var where = stats.lastReasonerProvider === 'ollama' ? 'on-device (ollama)' : 'cloud';
+      line = 'last reasoner call: ' + where + ' — ' +
+        stats.lastReasonerProvider + '/' + stats.lastReasonerModel +
+        (stats.lastReasonerVision ? ' (vision)' : ' (text)') +
+        ' in ' + Math.round(stats.lastReasonerLatency) + 'ms' +
+        (stats.lastPayloadBytes ? ', ' + Math.round(stats.lastPayloadBytes / 1024) + 'KB payload' : '') +
+        ' · ' + stats.localSteps + ' step(s) decided on-device, ' + stats.cloudSteps + ' in the cloud';
+    } else if (total) {
+      line = stats.localSteps + ' step(s) decided on-device (Chrome built-in model), ' +
+        stats.cloudSteps + ' in the cloud';
+    } else {
+      line = 'no inference yet';
+    }
+    var perceptionBits = [];
+    if (stats.lastOcrMs !== null) {
+      perceptionBits.push('OCR ' + stats.lastOcrMs + 'ms (' + stats.lastOcrRegions + ' words)');
+    }
+    if (stats.lastVisualMs !== null) {
+      perceptionBits.push('CLIP ' + stats.lastVisualMs + 'ms (' + stats.lastVisualScores + ' elements)');
+    }
+    if (perceptionBits.length) line += ' · on-device perception: ' + perceptionBits.join(', ');
+    lineEl.textContent = line;
   }
   function trackStats(e) {
     var ts = e.ts ? new Date(e.ts).getTime() : NaN;
@@ -354,10 +412,41 @@
     if (!isNaN(ts)) stats.lastTs = ts;
     if (e.step) stats.steps = e.step;
     if (e.type === 'OBSERVATION_RECEIVED') {
-      var red = (e.payload || {}).pii_redactions || {};
+      var op = e.payload || {};
+      var red = op.pii_redactions || {};
       var n = 0;
       Object.keys(red).forEach(function (k) { n += Number(red[k]) || 0; });
       stats.pii += n;
+      if (op.ocr_ms !== undefined && op.ocr_ms !== null) {
+        stats.lastOcrMs = op.ocr_ms;
+        stats.lastOcrRegions = op.ocr_regions || 0;
+      }
+      if (op.visual_ms !== undefined && op.visual_ms !== null) {
+        stats.lastVisualMs = op.visual_ms;
+        stats.lastVisualScores = op.visual_scores || 0;
+      }
+    }
+    if (e.type === 'MODEL_CALL_COMPLETED') {
+      var mp = e.payload || {};
+      if (mp.role === 'reasoner') {
+        stats.lastReasonerProvider = mp.provider || '';
+        stats.lastReasonerModel = mp.model || '';
+        stats.lastReasonerLatency = mp.latency_ms || 0;
+        stats.lastReasonerVision = !!mp.vision;
+        // Real byte counts already on this event -- not estimated, not a
+        // guess: chars_in is the exact digest sent, image_bytes the exact
+        // base64 screenshot size when one was attached.
+        stats.lastPayloadBytes = (mp.chars_in || 0) + (mp.image_bytes || 0);
+      }
+    }
+    if (e.type === 'ACTION_PROPOSED') {
+      var src = (e.payload || {}).perception_source || '';
+      if (src.indexOf('local') === 0) {
+        stats.localSteps++;
+      } else if (src === 'vision-ladder' || src === 'cloud') {
+        if (stats.lastReasonerProvider === 'ollama') stats.localSteps++;
+        else stats.cloudSteps++;
+      }
     }
     renderStats();
   }
@@ -418,6 +507,8 @@
       case 'WS_DISCONNECTED': return 'extension went away; it will reconnect';
       case 'ERROR': return p.error;
       case 'STATE_CHANGED': return p.state + (p.detail ? ' - ' + p.detail : '');
+      case 'REDACTION_VERIFY_FAILED':
+        return 'VERIFY FAILED — leaked kind(s): ' + (p.kinds || []).join(', ') + ' — ' + p.detail;
       default: return JSON.stringify(p).slice(0, 220);
     }
   }
@@ -534,7 +625,10 @@
   function handle(e) {
     if (e.type !== 'PONG') push(e);
     trackStats(e);
-    if (e.task_id) { activeTask = e.task_id; set('p-task', e.task_id); }
+    if (e.task_id) {
+      activeTask = e.task_id; set('p-task', e.task_id);
+      document.getElementById('compliance').disabled = false;
+    }
     var p = e.payload || {};
 
     if (e.type === 'TASK_CREATED') resetPipeline();
@@ -556,6 +650,11 @@
           + '  The agent is watching and will continue by itself.');
         break;
       case 'LOGIN_DETECTED': banner(''); break;
+      case 'REDACTION_VERIFY_FAILED':
+        banner('⚠ VERIFY caught a redaction miss — on-device re-OCR read '
+          + (p.kinds || []).join(', ') + ' off a screenshot that was supposed to be blacked '
+          + 'out. That screenshot was withheld, not sent. Fail-closed, as designed.');
+        break;
       case 'STATE_CHANGED':
         set('p-state', p.state, p.state === 'FAILED' ? 'off'
           : (p.state === 'COMPLETED' ? 'on' : ''));
@@ -622,6 +721,10 @@
   document.getElementById('cmd').addEventListener('keydown', function (e) {
     if (e.key === 'Enter') document.getElementById('run').click();
   });
+  document.getElementById('compliance').onclick = function () {
+    if (activeTask) window.open('/tasks/' + activeTask + '/compliance-report?format=html', '_blank');
+  };
+
   document.getElementById('cancel').onclick = function () {
     send('TASK_CANCEL', { task_id: activeTask });
   };

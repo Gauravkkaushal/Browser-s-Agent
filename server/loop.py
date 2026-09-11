@@ -195,9 +195,13 @@ class Task:
     async def observe(self, screenshot: bool = False) -> Observation:
         self._guard()
         try:
+            # Only meaningful (and only sent) alongside a screenshot -- it is
+            # what the on-device CLIP pass scores candidate elements against.
+            visual_query = (self.plan.objective if self.plan else self.command) if screenshot else ""
             obs = await bridge.observe(task_id=self.task_id, screenshot=screenshot,
                                        privacy_mode=self.privacy_mode,
-                                       keep_terms=self.keep_terms)
+                                       keep_terms=self.keep_terms,
+                                       visual_query=visual_query)
         except BridgeError as exc:
             # The page refused a content script outright. That is the browser's
             # rule, not a fault to retry -- and giving up here is what made
@@ -233,7 +237,24 @@ class Task:
             "screenshot": obs.screenshot,
             "observed_at": obs.observed_at,
             "user_tab_note": obs.user_tab_note,
+            "qr_detected": obs.qr_detected,
+            "ocr_regions": len(obs.ocr_regions),
+            "ocr_ms": obs.ocr_ms,
+            "ocr_leak_detected": obs.ocr_leak_detected,
+            "ocr_leak_kinds": obs.ocr_leak_kinds,
+            "visual_scores": len(obs.visual_scores),
+            "visual_ms": obs.visual_ms,
         }, task_id=self.task_id, step=self.step)
+        if obs.ocr_leak_detected:
+            # A real incident, not routine telemetry -- its own event type so
+            # it cannot be missed scrolling past ordinary OBSERVATION_RECEIVED
+            # lines, and so the audit trail carries it as a distinct, greppable
+            # record.
+            await bus.emit("REDACTION_VERIFY_FAILED", {
+                "kinds": obs.ocr_leak_kinds,
+                "detail": "on-device re-OCR read a PII shape off the redacted screenshot; "
+                          "the screenshot for this step was withheld rather than sent",
+            }, task_id=self.task_id, step=self.step)
         return obs
 
     # -- login gate ---------------------------------------------------------
@@ -385,15 +406,21 @@ class Task:
                         except Exception:
                             action = None
             
-            # 2. Fallback to hosted reasoner if local failed or low confidence
+            # 2. Fallback to the ladder reasoner (Ollama's local VLM first,
+            #    then cloud) if step 1 failed or was low confidence. When this
+            #    step already carries a redacted screenshot, hand it along --
+            #    the ladder's own local rung (Ollama + a small vision model)
+            #    gets first look before anything leaves the device.
             if action is None:
+                shot = reasoner_obs.screenshot if config.VISION_REASONING_ENABLED else ""
                 action = await reasoner.propose(
                     self.plan.objective if self.plan else self.command,
                     self.plan, reasoner_obs, self.history, self.task_id, self.step, self.extracted,
                     discovered=self.discovered, notes=self.notes,
                     dead_targets=self._dead_targets,
+                    image_b64=shot or "",
                 )
-                action.perception_source = "cloud"
+                action.perception_source = "vision-ladder" if shot else "cloud"
                 
                 from .reasoner import _ground
                 action = _ground(action, obs)

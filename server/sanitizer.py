@@ -161,6 +161,12 @@ def sanitize_observation(obs: Observation) -> Tuple[Observation, Dict[str, Any]]
         "pii_redactions": dict(obs.pii_redactions or {}),
         "pii_total": sum(int(v or 0) for v in (obs.pii_redactions or {}).values()),
         "pii_occurrences": dict(obs.pii_occurrences or {}),
+        # Of pii_redactions, how many additionally passed a real checksum
+        # (Luhn for card numbers, Verhoeff for Aadhaar) -- computed by the
+        # content script but previously dropped before it reached the audit
+        # trail. Carried through here so the compliance report has real
+        # numbers to cite instead of just the pattern-match count.
+        "pii_verified": dict(obs.pii_verified or {}),
         "masked_regions": len(obs.sensitive_boxes or []),
         # What each box covers, so "5 regions blacked out" can be checked
         # rather than taken on faith.

@@ -49,6 +49,55 @@ const PII_PATTERNS = [
 
 const PRICE_REGEX = /(?:₹|Rs\.?|INR|\$|€|£)\s?[\d,]+(?:\.\d{1,2})?/i
 
+// ---------------------------------------------------------------------------
+// Checksum validators. A value is masked either way -- these only say how
+// confidently it was CLASSIFIED, which is what precision reporting needs.
+// A 16-digit run that fails Luhn is far more often a coupon or order id than
+// a card number; a 12-digit run that fails Verhoeff is far more often a
+// phone-adjacent number than an Aadhaar. Real, standard checksums -- not
+// invented ones -- so they mean the same thing here as anywhere else.
+// ---------------------------------------------------------------------------
+function luhnValid(raw) {
+  const digits = String(raw).replace(/\D/g, '')
+  if (digits.length < 13 || digits.length > 19) return false
+  let sum = 0
+  let alt = false
+  for (let i = digits.length - 1; i >= 0; i--) {
+    let n = digits.charCodeAt(i) - 48
+    if (alt) {
+      n *= 2
+      if (n > 9) n -= 9
+    }
+    sum += n
+    alt = !alt
+  }
+  return sum % 10 === 0
+}
+
+// Verhoeff checksum (the algorithm UIDAI actually uses for Aadhaar's 12th
+// digit) -- multiplication and permutation tables per the standard algorithm.
+const VERHOEFF_D = [
+  [0,1,2,3,4,5,6,7,8,9],[1,2,3,4,0,6,7,8,9,5],[2,3,4,0,1,7,8,9,5,6],
+  [3,4,0,1,2,8,9,5,6,7],[4,0,1,2,3,9,5,6,7,8],[5,9,8,7,6,0,4,3,2,1],
+  [6,5,9,8,7,1,0,4,3,2],[7,6,5,9,8,2,1,0,4,3],[8,7,6,5,9,3,2,1,0,4],
+  [9,8,7,6,5,4,3,2,1,0],
+]
+const VERHOEFF_P = [
+  [0,1,2,3,4,5,6,7,8,9],[1,5,7,6,2,8,3,0,9,4],[5,8,0,3,7,9,6,1,4,2],
+  [8,9,1,6,0,4,3,5,2,7],[9,4,5,3,1,2,6,8,7,0],[4,2,8,6,5,7,3,9,0,1],
+  [2,7,9,3,8,0,6,4,1,5],[7,0,4,6,9,1,3,2,5,8],
+]
+function verhoeffValid(raw) {
+  const digits = String(raw).replace(/\D/g, '')
+  if (digits.length !== 12) return false
+  let c = 0
+  const reversed = digits.split('').reverse()
+  for (let i = 0; i < reversed.length; i++) {
+    c = VERHOEFF_D[c][VERHOEFF_P[i % 8][reversed[i].charCodeAt(0) - 48]]
+  }
+  return c === 0
+}
+
 // Field names whose *values* must never leave the page at all.
 const PROTECTED_FIELD_REGEX = /password|passwd|\botp\b|cvv|cvc|card\s*number|cardnumber|aadhaar|upi\s*pin|\bpin\b|secret|token/i
 
@@ -98,6 +147,11 @@ let redactionCounts = {}
 // serialised, never sent, and never leave this page -- only their sizes are.
 let redactedValues = {}
 let redactionOccurrences = {}
+// DISTINCT values, per kind, that also passed a real checksum -- see
+// luhnValid/verhoeffValid above.
+let redactionVerified = {}
+// type -> Map(value -> stable surrogate number), reset once per observation.
+let redactionIndex = {}
 
 let scanOverlayHost = null
 let scanOverlayTimer = null
@@ -186,11 +240,36 @@ function hideScanOverlay() {
   scanOverlayHost = null
 }
 
+/**
+ * Records one redaction and returns a stable per-type, per-value surrogate
+ * number -- the same real phone number always gets the same "_02" within one
+ * observation, so a reasoner tracking "the number from step 1" can tell it
+ * apart from a different one, without ever seeing either value.
+ */
 function noteRedaction(type, match) {
   if (!redactedValues[type]) redactedValues[type] = new Set()
-  redactedValues[type].add(String(match).replace(/\s+/g, ''))
+  if (!redactionIndex[type]) redactionIndex[type] = new Map()
+  const key = String(match).replace(/\s+/g, '')
+  const isNew = !redactedValues[type].has(key)
+  redactedValues[type].add(key)
   redactionOccurrences[type] = (redactionOccurrences[type] || 0) + 1
   redactionCounts[type] = redactedValues[type].size
+  if (isNew) {
+    redactionIndex[type].set(key, redactionIndex[type].size + 1)
+    let verified = false
+    if (type === 'CARD') verified = luhnValid(match)
+    else if (type === 'AADHAAR') verified = verhoeffValid(match)
+    if (verified) {
+      if (!redactionVerified[type]) redactionVerified[type] = new Set()
+      redactionVerified[type].add(key)
+    }
+  }
+  return redactionIndex[type].get(key)
+}
+
+function surrogate(type, match) {
+  const n = noteRedaction(type, match)
+  return '[REDACTED:' + type + '_' + String(n).padStart(2, '0') + ']'
 }
 
 function redact(text) {
@@ -198,18 +277,14 @@ function redact(text) {
   let out = String(text).replace(/\s+/g, ' ').trim()
   for (const p of PII_PATTERNS) {
     p.regex.lastIndex = 0
-    out = out.replace(p.regex, (match) => {
-      noteRedaction(p.type, match)
-      return '[REDACTED:' + p.type + ']'
-    })
+    out = out.replace(p.regex, (match) => surrogate(p.type, match))
   }
   for (const p of activeExtraPatterns()) {
     p.regex.lastIndex = 0
     out = out.replace(p.regex, (match) => {
       // Never hide what the operator themselves asked for.
       if (isKept(match)) return match
-      noteRedaction(p.type, match)
-      return '[REDACTED:' + p.type + ']'
+      return surrogate(p.type, match)
     })
   }
   return out
@@ -517,6 +592,8 @@ function walk() {
   redactionCounts = {}
   redactedValues = {}
   redactionOccurrences = {}
+  redactionVerified = {}
+  redactionIndex = {}
   const started = performance.now()
   const errors = []
   const sensitiveBoxes = []
@@ -806,6 +883,9 @@ function walk() {
     errors: errors,
     pii_redactions: Object.assign({}, redactionCounts),
     pii_occurrences: Object.assign({}, redactionOccurrences),
+    pii_verified: Object.fromEntries(
+      Object.keys(redactionVerified).map((k) => [k, redactionVerified[k].size])
+    ),
     agent_build: AGENT_BUILD,
     privacy_mode: privacyMode,
     walk_ms: Math.round(performance.now() - started),
