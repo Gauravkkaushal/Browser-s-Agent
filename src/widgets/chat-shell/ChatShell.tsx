@@ -157,12 +157,18 @@ export function ChatShell({
             N
           </div>
           <div>
-            <Typography.Text className="brand-title">NetraShield</Typography.Text>
-            <Typography.Text className="brand-subtitle">Private page assistant</Typography.Text>
+            <Typography.Text className="brand-title">
+              NetraShield
+              <span
+                className={`brand-status-dot${isRunning ? ' busy' : extensionReady ? ' ready' : ''}`}
+                aria-hidden="true"
+              />
+            </Typography.Text>
+            <Typography.Text className="brand-subtitle">
+              {isRunning ? statusText || 'Working…' : 'Private page assistant'}
+            </Typography.Text>
             {localModelStatus && (
-              <span style={{ fontSize: '10px', color: '#6ee7b7', border: '1px solid #10b981', padding: '1px 4px', borderRadius: '4px', marginLeft: '6px' }}>
-                Nano: {localModelStatus}
-              </span>
+              <span className="nano-pill">Nano: {localModelStatus}</span>
             )}
           </div>
         </div>
@@ -245,14 +251,16 @@ export function ChatShell({
               className="quick-action-pill"
               onClick={() => onTaskChange('Scroll through the whole page and give a complete summary')}
             >
-              📜 Full Page Scroll &amp; Summarize
+              <span className="qa-icon" aria-hidden="true">📜</span>
+              <span className="qa-text">Full Page Scroll &amp; Summarize</span>
             </button>
             <button
               type="button"
               className="quick-action-pill"
               onClick={() => onTaskChange('Scan and redact all sensitive PII on this page')}
             >
-              🛡️ Scan &amp; Redact Sensitive PII
+              <span className="qa-icon" aria-hidden="true">🛡️</span>
+              <span className="qa-text">Scan &amp; Redact Sensitive PII</span>
             </button>
           </div>
         </section>
@@ -266,11 +274,19 @@ export function ChatShell({
           onScroll={onThreadScroll}
         >
           {messages.map((message) => (
-            <article className={`message ${message.role}`} key={message.id}>
-              {message.text}
-            </article>
+            <div className={`message-row ${message.role}`} key={message.id}>
+              {message.role === 'assistant' && (
+                <span className="message-avatar" aria-hidden="true">N</span>
+              )}
+              <article className={`message ${message.role}`}>{message.text}</article>
+            </div>
           ))}
-          {isRunning && <article className="message assistant pending">{statusText}</article>}
+          {isRunning && (
+            <div className="message-row assistant">
+              <span className="message-avatar" aria-hidden="true">N</span>
+              <article className="message assistant pending">{statusText}</article>
+            </div>
+          )}
           {pending && (
             <div className="approval-card" role="alertdialog" aria-label="Approval required">
               <div className="approval-head">

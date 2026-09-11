@@ -16,7 +16,7 @@
 // compares this against the file on disk and says so loudly when Chrome is
 // still running an older copy -- a stale content script looks exactly like a
 // broken agent, and that is a miserable thing to debug.
-const AGENT_BUILD = 'b18-scan-sweep'
+const AGENT_BUILD = 'b19-select-error-detail'
 
 const AGENT_EID = 'agentEid'
 const AGENT_NID = 'agentNid'
@@ -1455,11 +1455,20 @@ async function execute(action) {
     }
     case 'select': {
       if (el.tagName.toLowerCase() !== 'select') {
-        return { ok: false, error: 'target is not a <select>' }
+        return {
+          ok: false,
+          error: 'target is not a <select> (it is a <' + el.tagName.toLowerCase() + '>'
+            + (el.getAttribute('role') ? ' with role="' + el.getAttribute('role') + '"' : '')
+            + '); this is a custom dropdown, not a native one -- click it to open the '
+            + 'menu, then click the option that appears instead of using select',
+        }
       }
       const want = String(params.value == null ? '' : params.value)
       const opt = Array.from(el.options).find((o) => o.value === want || (o.textContent || '').trim() === want)
-      if (!opt) return { ok: false, error: 'option not found: ' + want }
+      if (!opt) {
+        const available = Array.from(el.options).map((o) => (o.textContent || '').trim()).filter(Boolean).slice(0, 20)
+        return { ok: false, error: 'option not found: ' + want + (available.length ? '; available options: ' + available.join(', ') : '') }
+      }
       el.value = opt.value
       el.dispatchEvent(new Event('input', { bubbles: true }))
       el.dispatchEvent(new Event('change', { bubbles: true }))

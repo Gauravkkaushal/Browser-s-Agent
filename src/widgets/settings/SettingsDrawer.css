@@ -1,12 +1,16 @@
 .settings-drawer .ant-drawer-content {
-  background: #0f172a !important;
-  color: #f1f5f9;
+  background: var(--ns-bg-1) !important;
+  color: var(--ns-text);
+  background-image:
+    radial-gradient(60% 40% at 100% 0%, rgba(139, 123, 255, 0.14), transparent 60%),
+    radial-gradient(50% 30% at 0% 100%, rgba(34, 211, 238, 0.1), transparent 60%) !important;
 }
 
 .settings-drawer .ant-drawer-header {
-  background: #1e293b !important;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.15) !important;
+  background: rgba(16, 19, 30, 0.85) !important;
+  border-bottom: 1px solid var(--ns-border) !important;
   padding: 14px 18px;
+  backdrop-filter: blur(10px);
 }
 
 .settings-drawer-header {
@@ -17,19 +21,22 @@
 
 .settings-drawer-header .header-icon {
   font-size: 20px;
-  color: #38bdf8;
+  background: var(--ns-gradient-brand);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 .settings-drawer-header .title-text {
   font-size: 15px;
-  font-weight: 600;
-  color: #f8fafc;
+  font-weight: 650;
+  color: var(--ns-text);
   line-height: 1.2;
 }
 
 .settings-drawer-header .subtitle-text {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--ns-text-dim);
 }
 
 .settings-content {
@@ -47,14 +54,14 @@
 
 .section-label {
   font-size: 13px;
-  font-weight: 600;
-  color: #e2e8f0;
+  font-weight: 650;
+  color: #e5e3f5;
   letter-spacing: 0.2px;
 }
 
 .section-hint {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--ns-text-dim);
   margin: 0 !important;
   line-height: 1.4;
 }
@@ -70,22 +77,24 @@
   height: auto !important;
   line-height: normal !important;
   padding: 10px 12px !important;
-  background: #1e293b !important;
-  border: 1px solid rgba(148, 163, 184, 0.2) !important;
-  border-radius: 8px !important;
+  background: var(--ns-surface) !important;
+  border: 1px solid var(--ns-border) !important;
+  border-radius: 10px !important;
   color: #cbd5e1 !important;
+  backdrop-filter: blur(6px);
   transition: all 0.2s ease;
 }
 
 .engine-radio-group .ant-radio-button-wrapper:hover {
-  border-color: #38bdf8 !important;
-  background: #1e293b !important;
+  border-color: var(--ns-border-strong) !important;
+  background: rgba(139, 123, 255, 0.1) !important;
 }
 
 .engine-radio-group .ant-radio-button-wrapper-checked {
-  background: rgba(56, 189, 248, 0.08) !important;
-  border-color: #38bdf8 !important;
-  color: #f8fafc !important;
+  background: linear-gradient(135deg, rgba(139, 123, 255, 0.18), rgba(34, 211, 238, 0.1)) !important;
+  border-color: rgba(178, 190, 255, 0.5) !important;
+  color: var(--ns-text) !important;
+  box-shadow: 0 4px 16px rgba(76, 58, 200, 0.2);
 }
 
 .engine-card .card-header {
@@ -97,17 +106,17 @@
 
 .engine-card .card-title {
   font-size: 13px;
-  font-weight: 600;
-  color: #f8fafc;
+  font-weight: 650;
+  color: var(--ns-text);
 }
 
 .engine-card .card-icon {
   font-size: 14px;
-  color: #38bdf8;
+  color: var(--ns-violet);
 }
 
 .engine-card .card-icon.onnx-icon {
-  color: #4ade80;
+  color: var(--ns-emerald);
 }
 
 .engine-card .card-icon.server-icon {
@@ -116,14 +125,14 @@
 
 .engine-card .card-desc {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--ns-text-dim);
   line-height: 1.35;
   white-space: normal;
 }
 
 .settings-divider {
   margin: 8px 0 !important;
-  border-color: rgba(148, 163, 184, 0.12) !important;
+  border-color: var(--ns-border) !important;
 }
 
 .server-input-group {
@@ -139,14 +148,15 @@
 }
 
 .specs-card {
-  background: #1e293b;
-  border: 1px solid rgba(148, 163, 184, 0.15);
-  border-radius: 8px;
+  background: var(--ns-surface);
+  border: 1px solid var(--ns-border);
+  border-radius: 10px;
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-top: 6px;
+  backdrop-filter: blur(6px);
 }
 
 .spec-row {
@@ -157,11 +167,11 @@
 }
 
 .spec-key {
-  color: #94a3b8;
+  color: var(--ns-text-dim);
 }
 
 .spec-val {
-  color: #f1f5f9;
+  color: var(--ns-text);
   font-weight: 500;
   text-align: right;
   max-width: 60%;
@@ -169,4 +179,16 @@
 
 .settings-actions {
   margin-top: 10px;
+}
+
+.settings-actions .ant-btn-primary {
+  background: var(--ns-gradient-cta);
+  border: none;
+  color: #0a0c15;
+  font-weight: 700;
+  box-shadow: 0 6px 18px rgba(124, 92, 255, 0.35);
+}
+
+.settings-actions .ant-btn-primary:hover {
+  filter: brightness(1.06);
 }

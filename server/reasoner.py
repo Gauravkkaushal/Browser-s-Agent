@@ -71,7 +71,17 @@ type(target.element_id, params.text)   set a field's text (works on
 keypress(params.key_combo)    "Enter", "Escape", "ctrl+k", ...
 scroll(params.direction, params.amount_px)
 hover / focus(target.element_id)
-select(target.element_id, params.value)   a <select> option
+select(target.element_id, params.value)   a NATIVE <select> option only.
+                              Check the target's `tag` in `elements` first: this
+                              verb fails on anything that is not tag="select".
+                              Most on-page "dropdowns" (a date/country/sort
+                              picker, an autocomplete, anything built from a
+                              <div>/<button> with role=combobox or role=listbox)
+                              are NOT native selects -- for those, `click` the
+                              control to open it, then `click` the option
+                              (role=option/menuitem, or listitem) that appears
+                              in the next observation. Never guess at a value
+                              for those; pick the option element you can see.
 wait(params.timeout_ms, params.text_contains)   wait for text to appear
 extract(params.max_results)   read a repeated list of priced items off the page
 screenshot                    capture the current view
@@ -176,6 +186,11 @@ DISCIPLINE
 - If you need to type but see no editable element, the composer may be below the
   fold or behind a click. Scroll, or open the thing that reveals it -- do not
   keep clicking what you already clicked.
+- A "target is not a <select>" error means you tried `select` on a custom
+  dropdown. Switch strategy: `click` that control to open it, then `click` the
+  option that appears (it will show up as a new element with role=option,
+  role=menuitem or similar in the next observation) -- do not retry `select`
+  on the same element.
 - Actions that send, buy, pay, post or delete will be paused for human
   approval. Propose them normally when the task calls for them.
 - Before ticking a long list of checkboxes/toggles one by one, look for a bulk
