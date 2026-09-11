@@ -14,6 +14,35 @@ body,
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* ---- NetraShield premium palette --------------------------------------
+     Shared across the popup shell and any portaled surfaces (antd drawers,
+     dropdowns) which mount outside .chat-popup and so need the tokens on
+     :root rather than scoped to a class. */
+  --ns-bg-0: #05060b;
+  --ns-bg-1: #0a0c15;
+  --ns-bg-2: #10131e;
+  --ns-surface: rgba(255, 255, 255, 0.045);
+  --ns-surface-strong: rgba(255, 255, 255, 0.08);
+  --ns-border: rgba(148, 163, 184, 0.16);
+  --ns-border-strong: rgba(178, 190, 255, 0.32);
+  --ns-text: #f4f3fb;
+  --ns-text-dim: #9aa2b8;
+  --ns-text-faint: #6d7590;
+
+  --ns-violet: #8b7bff;
+  --ns-violet-strong: #7c5cff;
+  --ns-cyan: #22d3ee;
+  --ns-emerald: #34d399;
+  --ns-amber: #f0c674;
+  --ns-rose: #f87171;
+
+  --ns-gradient-brand: linear-gradient(135deg, #8b7bff 0%, #6d8dff 45%, #22d3ee 100%);
+  --ns-gradient-user: linear-gradient(135deg, #6d5bff 0%, #4f7cff 100%);
+  --ns-gradient-cta: linear-gradient(135deg, #a78bfa 0%, #7c5cff 55%, #22d3ee 130%);
+
+  --ns-shadow-soft: 0 12px 32px rgba(3, 4, 10, 0.45);
+  --ns-shadow-glow: 0 0 0 1px rgba(139, 123, 255, 0.14), 0 18px 40px rgba(76, 58, 200, 0.22);
 }
 
 body {
@@ -23,4 +52,9 @@ body {
   display: flex;
   justify-content: flex-end;
   background: transparent;
+}
+
+::selection {
+  background: rgba(139, 123, 255, 0.38);
+  color: #ffffff;
 }
