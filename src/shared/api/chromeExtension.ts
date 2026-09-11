@@ -68,7 +68,6 @@ export async function sendToActiveTab(message: TabMessage) {
   })
 }
 
-import { runOnnxInference } from '../lib/onnxInference'
 import { loadSettings } from '../lib/settingsStorage'
 
 export async function askReasoningServer(payload: AgentRequestPayload): Promise<ReasonResult> {
@@ -76,21 +75,11 @@ export async function askReasoningServer(payload: AgentRequestPayload): Promise<
 
   if (chromeApi?.runtime?.sendMessage) {
     return new Promise<ReasonResult>((resolve) => {
-      chromeApi.runtime.sendMessage({ type: 'NETRASHIELD_REASON', payload }, async (response) => {
+      chromeApi.runtime.sendMessage({ type: 'NETRASHIELD_REASON', payload }, (response) => {
         const runtimeError = chromeApi.runtime.lastError?.message
 
         if (runtimeError || !response) {
-          console.warn('[NetraShield] Extension message error, attempting direct ONNX inference:', runtimeError)
-          try {
-            const onnxResult = await runOnnxInference(payload.task, payload)
-            if (onnxResult) {
-              resolve(onnxResult)
-              return
-            }
-          } catch (onnxErr) {
-            console.error('[NetraShield] Direct ONNX fallback failed:', onnxErr)
-          }
-
+          console.warn('[NetraShield] Extension message error:', runtimeError)
           resolve({
             ok: false,
             source: 'extension-fallback',
@@ -135,15 +124,6 @@ export async function askReasoningServer(payload: AgentRequestPayload): Promise<
     } catch (err) {
       console.warn('[NetraShield] Dev direct server call failed:', err)
     }
-  }
-
-  try {
-    const onnxResult = await runOnnxInference(payload.task, payload)
-    if (onnxResult) {
-      return onnxResult
-    }
-  } catch (err) {
-    console.warn('[NetraShield] Dev ONNX inference failed:', err)
   }
 
   return {

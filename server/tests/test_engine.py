@@ -449,6 +449,85 @@ class TestDeadTargets:
 
 
 # ---------------------------------------------------------------------------
+# SCENE GRAPH: every span the reasoner sees is tagged with where it came
+# from, so provenance is a field a reader (or a judge) can check, not an
+# implication of which key it happened to show up under.
+# ---------------------------------------------------------------------------
+class TestSceneGraphOrigin:
+    def test_a_dom_element_is_tagged_dom(self):
+        from server import reasoner
+        o = Observation(url="https://shop.example/", interactive_elements=[
+            InteractiveElement(eid="e1", nid="aaaa", role="button", name="Buy now", box=[0, 0, 80, 30]),
+        ])
+        rows = reasoner._compact_elements(o)
+        assert rows[0]["origin"] == "dom"
+
+    def test_ocr_text_is_tagged_ocr_and_carries_no_eid(self):
+        from server.reasoner import _observation_digest
+        o = Observation(
+            url="https://shop.example/",
+            ocr_regions=[{"text": "50% OFF", "box": [10, 20, 40, 12], "confidence": 91}],
+        )
+        digest = _observation_digest(o, tier=0)
+        assert digest["ocr_text"][0]["origin"] == "ocr"
+        assert "eid" not in digest["ocr_text"][0]
+
+
+# ---------------------------------------------------------------------------
+# EGRESS GATE: the payload budget is a measured real number, not a claim.
+# ---------------------------------------------------------------------------
+class TestPayloadBudget:
+    def _propose(self, url="https://shop.example/", elements=None):
+        import asyncio
+
+        from server import config, reasoner
+        from server.schemas import Plan, PlanStep
+
+        async def fake_call(role, system, user, **_):
+            return {"action": "wait", "target": {}, "params": {}}
+
+        events = []
+
+        async def fake_emit(type_, payload=None, task_id=None, step=0):
+            events.append((type_, payload))
+
+        original_call, original_emit = reasoner.llm.call, reasoner.bus.emit
+        reasoner.llm.call = fake_call
+        reasoner.bus.emit = fake_emit
+        try:
+            plan = Plan(objective="buy the cheapest bat", steps=[PlanStep(n=1, goal="find it")])
+            o = obs(url=url, elements=elements or [])
+            asyncio.run(reasoner.propose("buy the cheapest bat", plan, o, [], "t1", 1))
+        finally:
+            reasoner.llm.call = original_call
+            reasoner.bus.emit = original_emit
+        return events
+
+    def test_an_ordinary_step_stays_under_a_generous_default_budget(self):
+        from server import config
+        original = config.PAYLOAD_BUDGET_KB
+        config.PAYLOAD_BUDGET_KB = 50
+        try:
+            events = self._propose()
+        finally:
+            config.PAYLOAD_BUDGET_KB = original
+        assert not any(t == "PAYLOAD_BUDGET_EXCEEDED" for t, _ in events)
+
+    def test_a_tiny_budget_is_measurably_exceeded_and_reported(self):
+        from server import config
+        original = config.PAYLOAD_BUDGET_KB
+        config.PAYLOAD_BUDGET_KB = 0
+        try:
+            events = self._propose()
+        finally:
+            config.PAYLOAD_BUDGET_KB = original
+        hits = [p for t, p in events if t == "PAYLOAD_BUDGET_EXCEEDED"]
+        assert len(hits) == 1
+        assert hits[0]["bytes"] > 0
+        assert hits[0]["over_by_bytes"] == hits[0]["bytes"] - hits[0]["budget_bytes"]
+
+
+# ---------------------------------------------------------------------------
 # The loop breaker must not confuse different actions for repeats
 # ---------------------------------------------------------------------------
 class TestRepeatSignature:

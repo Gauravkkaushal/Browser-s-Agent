@@ -76,6 +76,94 @@ describe('PII redaction patterns actually shipped in agent-content.js', () => {
   })
 })
 
+describe('checksum validators reduce false-positive PII classification', () => {
+  // Grab the whole checksum block (both functions plus their shared Verhoeff
+  // tables) in one slice, from luhnValid's declaration through verhoeffValid's
+  // closing brace, and evaluate it as real code -- not a re-implementation.
+  function loadChecksums(): { luhnValid: (raw: string) => boolean; verhoeffValid: (raw: string) => boolean } {
+    const start = SOURCE.indexOf('function luhnValid(')
+    const vStart = SOURCE.indexOf('function verhoeffValid(')
+    expect(start).toBeGreaterThan(-1)
+    expect(vStart).toBeGreaterThan(start)
+    let depth = 0
+    let end = vStart
+    let started = false
+    for (let i = vStart; i < SOURCE.length; i++) {
+      if (SOURCE[i] === '{') { depth++; started = true }
+      else if (SOURCE[i] === '}') { depth--; if (started && depth === 0) { end = i + 1; break } }
+    }
+    const body = SOURCE.slice(start, end)
+    // eslint-disable-next-line no-new-func
+    return new Function(`${body}; return { luhnValid, verhoeffValid };`)() as {
+      luhnValid: (raw: string) => boolean
+      verhoeffValid: (raw: string) => boolean
+    }
+  }
+
+  it('luhnValid accepts a real Luhn-valid test card and rejects a mutated one', () => {
+    const { luhnValid } = loadChecksums()
+    expect(luhnValid('4111111111111111')).toBe(true)
+    expect(luhnValid('4111111111111112')).toBe(false)
+  })
+
+  it('verhoeffValid accepts a real Verhoeff-valid 12-digit number and rejects a mutated one', () => {
+    const { verhoeffValid } = loadChecksums()
+    expect(verhoeffValid('234567890124')).toBe(true)
+    expect(verhoeffValid('234567890123')).toBe(false)
+  })
+
+  it('records which redacted values also passed their checksum, without weakening the mask', () => {
+    // Precision reporting only -- every match is still redacted regardless
+    // of checksum result (see noteRedaction).
+    expect(SOURCE).toContain('let redactionVerified = {}')
+    expect(SOURCE).toContain("if (type === 'CARD') verified = luhnValid(match)")
+    expect(SOURCE).toContain("else if (type === 'AADHAAR') verified = verhoeffValid(match)")
+    expect(SOURCE).toContain('pii_verified: Object.fromEntries(')
+  })
+})
+
+describe('numbered surrogate tokens (REDACT+TOKENIZE)', () => {
+  // Loads the REAL redact() plus everything it closes over (patterns, state,
+  // noteRedaction, surrogate) as one contiguous slice of the shipped source,
+  // so this proves the actual shipped behaviour, not a re-implementation.
+  function loadRedactor(): { redact: (t: string) => string } {
+    const start = SOURCE.indexOf('const PII_PATTERNS = [')
+    const fnStart = SOURCE.indexOf('function redact(text) {')
+    expect(start).toBeGreaterThan(-1)
+    expect(fnStart).toBeGreaterThan(start)
+    let depth = 0
+    let end = fnStart
+    let started = false
+    for (let i = fnStart; i < SOURCE.length; i++) {
+      if (SOURCE[i] === '{') { depth++; started = true }
+      else if (SOURCE[i] === '}') { depth--; if (started && depth === 0) { end = i + 1; break } }
+    }
+    const body = SOURCE.slice(start, end)
+    // eslint-disable-next-line no-new-func
+    return new Function(`${body}; return { redact };`)() as { redact: (t: string) => string }
+  }
+
+  it('gives the first distinct value in a type _01, the next distinct value _02', () => {
+    const { redact } = loadRedactor()
+    const out = redact('contact a@x.com or b@y.com')
+    expect(out).toContain('[REDACTED:EMAIL_01]')
+    expect(out).toContain('[REDACTED:EMAIL_02]')
+  })
+
+  it('reuses the same surrogate number when the same value repeats', () => {
+    const { redact } = loadRedactor()
+    const out = redact('email a@x.com again: a@x.com')
+    expect(out.match(/\[REDACTED:EMAIL_\d+\]/g)).toEqual(['[REDACTED:EMAIL_01]', '[REDACTED:EMAIL_01]'])
+  })
+
+  it('numbers each PII type independently', () => {
+    const { redact } = loadRedactor()
+    const out = redact('card 4111 1111 1111 1111, email a@x.com')
+    expect(out).toContain('[REDACTED:CARD_01]')
+    expect(out).toContain('[REDACTED:EMAIL_01]')
+  })
+})
+
 describe('protected fields never leave the page as values', () => {
   it('declares a protected-field regex covering password, otp, cvv and upi pin', () => {
     const m = SOURCE.match(/const PROTECTED_FIELD_REGEX = (\/.+\/[gimsuy]*)/)

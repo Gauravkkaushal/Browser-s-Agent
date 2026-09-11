@@ -19,9 +19,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
 
-from . import config, llm
+from . import compliance, config, llm
 from .browser_bridge import bridge
-from .events import audit_path, bus
+from .events import audit_path, bus, verify_audit_chain
 from .knowledge import known_hosts
 from .loop import registry
 from contextlib import asynccontextmanager
@@ -118,6 +118,30 @@ async def get_audit(task_id: str):
     return PlainTextResponse(path.read_text(encoding="utf-8"))
 
 
+@app.get("/tasks/{task_id}/audit/verify")
+async def get_audit_verify(task_id: str):
+    """Recompute the audit file's hash chain from scratch and say whether it
+    still matches -- tamper-evidence a reader can check, not just a claim."""
+    result = verify_audit_chain(task_id)
+    if "error" in result and result.get("lines", 0) == 0 and not audit_path(task_id).exists():
+        raise HTTPException(status_code=404, detail="no audit file for %s" % task_id)
+    return result
+
+
+@app.get("/tasks/{task_id}/compliance-report")
+async def get_compliance_report(task_id: str, format: str = "json"):
+    """A DPDP Act 2023 technical-controls report built from this task's own
+    audit trail -- real redaction/verification/policy counts and a freshly
+    recomputed hash-chain check, not a static claim. `?format=html` returns a
+    printable page; anything else returns the same data as JSON."""
+    report = compliance.generate_report(task_id)
+    if not report.get("found"):
+        raise HTTPException(status_code=404, detail="no audit file for %s" % task_id)
+    if format == "html":
+        return HTMLResponse(compliance.render_html(report))
+    return report
+
+
 @app.get("/tasks/{task_id}/trace")
 async def get_trace(task_id: str):
     """The URL-transition trace: the evidence that real navigation happened."""
@@ -193,6 +217,17 @@ async def fixture_shop():
 @app.get("/fixtures/upload", response_class=HTMLResponse)
 async def fixture_upload():
     return HTMLResponse(_read(FIXTURES, "upload.html"))
+
+
+@app.get("/fixtures/govt-scholarship", response_class=HTMLResponse)
+async def fixture_govt_scholarship():
+    """A local, offline stand-in for a real Indian government portal -- an
+    Aadhaar/PAN/bank-account scholarship form, an image-rendered reference
+    number (DOM has no text node for it, only OCR can read it), and a UPI
+    payment QR code. Lets the on-device perception + redaction + policy-gate
+    pipeline be demonstrated against government-shaped data without touching,
+    or claiming to be, any real .gov.in system."""
+    return HTMLResponse(_read(FIXTURES, "govt_scholarship.html"))
 
 
 @app.get("/fixtures/attendance", include_in_schema=False)

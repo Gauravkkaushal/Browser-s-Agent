@@ -16,7 +16,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import ValidationError
 
-from . import llm
+from . import config, llm
+from .events import bus
 from .knowledge import GENERIC_HINTS, hints_for
 from .vault import vault
 from .schemas import ActionProposal, Observation, Plan
@@ -42,6 +43,22 @@ fresh observation of the page as it is RIGHT NOW. You reply with exactly ONE
 next action as JSON.
 
 GROUNDING
+- A screenshot of the current viewport may be attached alongside this text.
+  When it is, use it to resolve anything the DOM digest under-describes --
+  canvas-drawn UI, a control's visual state (checked/open/highlighted), text
+  baked into an image, or which of several similar-looking elements is the
+  one actually in view. The `elements` list is still the ONLY source of valid
+  `eid`s -- the screenshot is for understanding the page, never for picking
+  coordinates to click.
+- `ocr_text`, when present, is text an on-device OCR pass read directly off
+  the screenshot -- words baked into a canvas or image that never existed as
+  DOM text. Use it to answer "what does it say" for that kind of content. It
+  has no `eid`; if the same words also appear as a real element, target that
+  element instead.
+- An element's `visual_match` (0..1, when present) is how well its cropped
+  screenshot region visually matches the objective, from an on-device CLIP
+  pass. A secondary hint for breaking ties between similarly-named elements --
+  role, name and text still decide first.
 - If the observation carries `WARNING_about_which_page_this_is`, the page you
   are looking at is NOT the one the user is looking at. When the task says
   "this page", "summarise this" or similar, do not answer about a different
@@ -260,7 +277,12 @@ def _compact_elements(obs: Observation, limit: int = 45, name_cap: int = 60,
     # them again; taking them off the list does.
     ordered = [e for e in ordered if e.nid not in dead and e.eid not in dead]
     for el in ordered[:limit]:
-        row: Dict[str, Any] = {"eid": el.eid, "role": el.role}
+        # SCENE GRAPH: every span in the digest is tagged with where it came
+        # from -- 'dom' here, 'ocr' on the text list below. A DOM row already
+        # carries the eid that makes it actionable; this just makes the
+        # provenance explicit and machine-checkable rather than implied by
+        # which key it showed up under.
+        row: Dict[str, Any] = {"eid": el.eid, "origin": "dom", "role": el.role}
         if el.name:
             row["name"] = el.name[:name_cap]
         elif el.text:
@@ -278,6 +300,12 @@ def _compact_elements(obs: Observation, limit: int = 45, name_cap: int = 60,
             row["offscreen"] = True
         if el.is_protected:
             row["protected"] = True
+        if obs.visual_scores.get(el.eid) is not None:
+            # How well this element's cropped screenshot region visually
+            # matches the plan objective, per the on-device CLIP pass -- 0..1,
+            # higher is more similar. A hint alongside the DOM signals above,
+            # not a replacement for them.
+            row["visual_match"] = obs.visual_scores[el.eid]
         rows.append(row)
     return rows
 
@@ -321,6 +349,15 @@ def _observation_digest(obs: Observation, tier: int = 0,
         digest["tabs"] = [{"tab_id": t.tab_id, "url": t.url[:70],
                            "title": t.title[:60], "active": t.active,
                            "agent_owned": t.agent_owned} for t in obs.tabs]
+    if obs.ocr_regions and tier == 0:
+        # Text the on-device OCR pass read directly off the screenshot --
+        # words baked into a canvas, an image, or anything else that never
+        # existed as text in the DOM. Position is reported so it can be told
+        # apart from same-worded elements elsewhere on the page; there is no
+        # eid here because OCR text is not a clickable target.
+        digest["ocr_text"] = [
+            {"origin": "ocr", "text": r["text"], "at": r["box"][:2]} for r in obs.ocr_regions[:40]
+        ]
     if obs.errors:
         digest["errors"] = obs.errors[:3]
     if obs.user_tab_note:
@@ -371,6 +408,7 @@ async def propose(
     discovered: str = "",
     notes: Optional[List[str]] = None,
     dead_targets: Optional[Dict[str, str]] = None,
+    image_b64: str = "",
 ) -> ActionProposal:
     plan_text = "\n".join(
         "%d. %s (done when: %s)" % (s.n, s.goal, s.done_when or "n/a") for s in plan.steps
@@ -403,6 +441,18 @@ async def propose(
             payload["site_hints"] = hints
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
+    tier0_bytes = len(build(0).encode("utf-8"))
+    budget_bytes = config.PAYLOAD_BUDGET_KB * 1024
+    if tier0_bytes > budget_bytes:
+        # Visible, not blocking: EGRESS GATE still sends the step (a task that
+        # was otherwise going fine should not fail over a KB budget), but the
+        # overage is a real, checkable number in the audit trail rather than
+        # a claim nobody can verify.
+        await bus.emit("PAYLOAD_BUDGET_EXCEEDED", {
+            "bytes": tier0_bytes, "budget_bytes": budget_bytes,
+            "over_by_bytes": tier0_bytes - budget_bytes,
+        }, task_id=task_id, step=step)
+
     # Try the full view first, then shrink. A provider that rejects the request
     # as too large, or whose per-minute token window is exhausted, will often
     # accept the same step expressed more tersely -- which beats failing a task
@@ -411,7 +461,12 @@ async def propose(
     last_error: Optional[Exception] = None
     for tier in (0, 1, 2):
         try:
-            raw = await llm.call("reasoner", SYSTEM, build(tier), task_id=task_id, step=step)
+            if image_b64:
+                raw = await llm.call_vision(
+                    "reasoner", SYSTEM, build(tier), image_b64, task_id=task_id, step=step
+                )
+            else:
+                raw = await llm.call("reasoner", SYSTEM, build(tier), task_id=task_id, step=step)
             break
         except llm.ModelError as exc:
             last_error = exc
@@ -434,7 +489,12 @@ async def propose(
             + "\n\nReturn ONE corrected JSON action. Use only allowed verbs and an eid "
               "that appears in the observation above."
         )
-        raw2 = await llm.call("reasoner", SYSTEM, retry_user, task_id=task_id, step=step)
+        if image_b64:
+            raw2 = await llm.call_vision(
+                "reasoner", SYSTEM, retry_user, image_b64, task_id=task_id, step=step
+            )
+        else:
+            raw2 = await llm.call("reasoner", SYSTEM, retry_user, task_id=task_id, step=step)
         try:
             action = ActionProposal.model_validate(raw2)
         except ValidationError as exc2:

@@ -11,6 +11,12 @@
  * No site-specific logic lives here.
  */
 
+// jsQR.js is a UMD bundle (self.jsQR = ...), not an ES module -- importing it
+// for its side effect is the module-service-worker equivalent of the classic
+// <script> tag offscreen.html uses for tesseract.min.js. It runs entirely
+// synchronously, in-process, on pixels that never leave the device.
+import './jsqr/jsQR.js'
+
 // Bump this whenever this file changes. Chrome keeps running the OLD service
 // worker until the extension is reloaded, and a stale worker reproduces bugs
 // that were fixed on disk hours ago -- indistinguishable from a broken agent
@@ -381,6 +387,147 @@ async function listTabs() {
 }
 
 // ---------------------------------------------------------------------------
+// On-device OCR: a redacted screenshot goes to the offscreen document (a
+// hidden, tab-less page the extension itself controls), which runs
+// Tesseract.js/WASM entirely from files bundled in the extension -- no CDN,
+// no network call, works with the machine offline. Service workers cannot
+// reliably host this: they can be torn down mid-task and lack the DOM
+// surface WASM builds like this expect, which is exactly why MV3 ships the
+// offscreen-document API for cases like this one.
+// ---------------------------------------------------------------------------
+let offscreenReady = null
+async function ensureOffscreenDocument() {
+  if (!chrome.offscreen) throw new Error('chrome.offscreen is unavailable in this Chrome build')
+  if (offscreenReady) return offscreenReady
+  offscreenReady = (async () => {
+    try {
+      if (chrome.offscreen.hasDocument && (await chrome.offscreen.hasDocument())) return
+    } catch (e) { /* hasDocument not available on every Chrome 116+ build; fall through */ }
+    try {
+      await chrome.offscreen.createDocument({
+        url: 'offscreen.html',
+        reasons: ['WORKERS'],
+        justification: 'run on-device OCR and CLIP vision grounding (Tesseract.js/ONNX Runtime Web, '
+          + 'all WASM) so screenshot content never leaves the browser',
+      })
+    } catch (e) {
+      // Chrome allows exactly one offscreen document; a second create() call
+      // racing this one is not a real failure.
+      if (!/only .*offscreen document|single offscreen/i.test(String((e && e.message) || ''))) throw e
+    }
+  })()
+  return offscreenReady
+}
+
+async function runOcr(screenshotB64) {
+  if (!screenshotB64) return { ok: false, error: 'no screenshot to read' }
+  try {
+    await ensureOffscreenDocument()
+  } catch (e) {
+    return { ok: false, error: 'could not start the offscreen OCR worker: ' + e.message }
+  }
+  try {
+    const res = await chrome.runtime.sendMessage({ type: 'AGENT_OCR', screenshot: screenshotB64 })
+    return res || { ok: false, error: 'no response from offscreen OCR worker' }
+  } catch (e) {
+    return { ok: false, error: 'ocr bridge failed: ' + e.message }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// VERIFY: the redaction wall's own fail-closed check. agent-content.js's
+// sensitive_boxes are only ever as good as the DOM<->pixel scale math in
+// captureRedacted() -- a rounding error, a zoomed page, or a box that never
+// got reported at all would black out the WRONG rectangle and nobody would
+// know. Re-reading the "redacted" image with OCR and re-checking it against
+// PII shapes is an independent second opinion, on the actual pixels the
+// server would have received, not on the DOM text a masking bug could not
+// see wrong in the first place.
+// ---------------------------------------------------------------------------
+const LEAK_CHECK_PATTERNS = [
+  { type: 'EMAIL', regex: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g },
+  { type: 'CARD', regex: /\b(?:\d[ -]*?){13,19}\b/g },
+  { type: 'AADHAAR', regex: /\b[2-9]\d{3}\s?\d{4}\s?\d{4}\b/g },
+  { type: 'PHONE', regex: /(?:\+?91[\s-]?)?[6-9](?:[\s-]?\d){9}\b/g },
+]
+
+/**
+ * Independently re-checks OCR text read off an ALREADY-REDACTED screenshot.
+ * Any hit means the visual mask missed something -- the caller must then
+ * withhold the screenshot itself (the pixels are the actual leak) and this
+ * function has already scrubbed the offending words out of the OCR text so
+ * they never reach obs.ocr_regions / the reasoner prompt either.
+ */
+function verifyRedaction(regions) {
+  const leakKinds = new Set()
+  const cleaned = (regions || []).map((r) => {
+    let text = r.text
+    for (const p of LEAK_CHECK_PATTERNS) {
+      p.regex.lastIndex = 0
+      if (p.regex.test(text)) {
+        leakKinds.add(p.type)
+        text = '[LEAK-REDACTED:' + p.type + ']'
+      }
+    }
+    return text === r.text ? r : Object.assign({}, r, { text })
+  })
+  return { leaked: leakKinds.size > 0, kinds: Array.from(leakKinds), regions: cleaned }
+}
+
+// ---------------------------------------------------------------------------
+// On-device CLIP grounding: scores the top DOM-ranked candidate elements by
+// how well their cropped screenshot region visually matches a short text
+// description of what the current plan step is looking for. This is a
+// PERCEPTION signal added on top of the DOM-based eid the executor still
+// uses to act -- it never invents a target from a pixel coordinate.
+// ---------------------------------------------------------------------------
+async function runClipScore(screenshotB64, elements, query, viewport) {
+  if (!screenshotB64 || !query || !elements || !elements.length) {
+    return { ok: true, scores: [], ms: 0 }
+  }
+  try {
+    await ensureOffscreenDocument()
+  } catch (e) {
+    return { ok: false, error: 'could not start the offscreen CLIP worker: ' + e.message }
+  }
+  const candidates = elements.map((el) => ({ eid: el.eid, box: el.box }))
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: 'AGENT_CLIP_SCORE', screenshot: screenshotB64, candidates, query, viewport,
+    })
+    return res || { ok: false, error: 'no response from offscreen CLIP worker' }
+  } catch (e) {
+    return { ok: false, error: 'clip bridge failed: ' + e.message }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// QR detection: a payment/UPI QR code is scannable PII that exists only as
+// pixels -- no DOM-text regex in agent-content.js could ever see it. Runs on
+// the RAW capture before any blackout, entirely synchronously, in this same
+// process. Only the LOCATION is ever read off the result; the decoded
+// content (jsQR's `.data`) is never touched, logged, or forwarded anywhere.
+// ---------------------------------------------------------------------------
+function detectQrBoxes(ctx, width, height) {
+  try {
+    if (typeof self.jsQR !== 'function') return []
+    const img = ctx.getImageData(0, 0, width, height)
+    const result = self.jsQR(img.data, width, height)
+    if (!result || !result.location) return []
+    const loc = result.location
+    const xs = [loc.topLeftCorner.x, loc.topRightCorner.x, loc.bottomLeftCorner.x, loc.bottomRightCorner.x]
+    const ys = [loc.topLeftCorner.y, loc.topRightCorner.y, loc.bottomLeftCorner.y, loc.bottomRightCorner.y]
+    const x0 = Math.min.apply(null, xs)
+    const y0 = Math.min.apply(null, ys)
+    const x1 = Math.max.apply(null, xs)
+    const y1 = Math.max.apply(null, ys)
+    return [{ x: x0, y: y0, w: x1 - x0, h: y1 - y0 }]
+  } catch (e) {
+    return []
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Screenshots: capture -> mask sensitive boxes -> jpeg base64.
 // The canvas is used ONLY to black out regions; nothing is ever drawn.
 // ---------------------------------------------------------------------------
@@ -398,6 +545,12 @@ async function captureRedacted(tabId, sensitiveBoxes, viewport) {
     const canvas = new OffscreenCanvas(bmp.width, bmp.height)
     const ctx = canvas.getContext('2d')
     ctx.drawImage(bmp, 0, 0)
+
+    // Find any QR code on the RAW capture, in bitmap pixel space, before a
+    // single pixel is blacked out. sensitive_boxes (below) are in viewport
+    // (CSS px) space and get scaled up to match; these are already in bitmap
+    // space, so they black out directly with no extra conversion.
+    const qrBoxes = detectQrBoxes(ctx, bmp.width, bmp.height)
 
     // Measure the scale from the image we actually got, rather than trusting
     // devicePixelRatio. The captured bitmap regularly differs from
@@ -419,6 +572,9 @@ async function captureRedacted(tabId, sensitiveBoxes, viewport) {
         Math.round(b[3] * scaleY) + pad * 2,
       )
     }
+    for (const q of qrBoxes) {
+      ctx.fillRect(Math.round(q.x) - pad, Math.round(q.y) - pad, Math.round(q.w) + pad * 2, Math.round(q.h) + pad * 2)
+    }
     const out = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.7 })
     const buf = await out.arrayBuffer()
     const bytes = new Uint8Array(buf)
@@ -427,7 +583,12 @@ async function captureRedacted(tabId, sensitiveBoxes, viewport) {
     for (let i = 0; i < bytes.length; i += CHUNK) {
       binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK))
     }
-    return { ok: true, screenshot: btoa(binary), masked_regions: (sensitiveBoxes || []).length, w: bmp.width, h: bmp.height }
+    return {
+      ok: true, screenshot: btoa(binary),
+      masked_regions: (sensitiveBoxes || []).length + qrBoxes.length,
+      qr_detected: qrBoxes.length,
+      w: bmp.width, h: bmp.height,
+    }
   } catch (e) {
     return { ok: false, error: 'redaction failed: ' + e.message }
   }
@@ -615,6 +776,50 @@ async function handleBridgeRequest(payload) {
         const shot = await captureRedacted(tabId, obs.sensitive_boxes, obs.viewport)
         obs.screenshot = shot.ok ? shot.screenshot : null
         obs.screenshot_error = shot.ok ? null : shot.error
+        obs.qr_detected = shot.ok ? shot.qr_detected : 0
+        // OCR reads the ALREADY-REDACTED image -- sensitive_boxes are solid
+        // black rectangles by this point, so nothing masked can be read back
+        // out through the text layer.
+        if (shot.ok) {
+          const ocr = await runOcr(shot.screenshot)
+          const verify = ocr.ok ? verifyRedaction(ocr.regions) : { leaked: false, kinds: [], regions: [] }
+          obs.ocr_regions = ocr.ok ? verify.regions : []
+          obs.ocr_error = ocr.ok ? null : ocr.error
+          obs.ocr_ms = ocr.ok ? ocr.ms : null
+          obs.ocr_leak_detected = verify.leaked
+          obs.ocr_leak_kinds = verify.kinds
+
+          // Fail closed: the mask that was supposed to cover this pixel
+          // region did not. Withholding the image is the only honest move --
+          // there is no way to selectively re-black-out a JPEG that already
+          // left the tab, and forwarding it "mostly redacted" is how a
+          // leak becomes routine instead of an incident.
+          if (verify.leaked) {
+            obs.screenshot = null
+            obs.screenshot_error = 'redaction verify failed: on-device re-OCR read '
+              + verify.kinds.join(', ') + ' off the "redacted" image; screenshot withheld'
+          }
+
+          // interactive_elements is already sorted by the walker's own
+          // on-screen/editable/role score (see agent-content.js), so taking
+          // the front of the list is taking the DOM's own best candidates --
+          // CLIP re-scores THOSE visually, it does not re-rank the whole page.
+          const clip = await runClipScore(
+            shot.screenshot, obs.interactive_elements, args.visual_query || '', obs.viewport,
+          )
+          obs.visual_scores = clip.ok
+            ? Object.fromEntries(clip.scores.map((s) => [s.eid, s.score]))
+            : {}
+          obs.visual_error = clip.ok ? null : clip.error
+          obs.visual_ms = clip.ok ? clip.ms : null
+        } else {
+          obs.ocr_regions = []
+          obs.ocr_error = null
+          obs.ocr_ms = null
+          obs.visual_scores = {}
+          obs.visual_error = null
+          obs.visual_ms = null
+        }
       }
       return { ok: true, result: obs }
     }

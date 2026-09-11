@@ -102,6 +102,16 @@ class TestSanitizer:
         assert report["masked_regions"] == 2
         assert report["injections_neutralized"] == 1
 
+    def test_the_report_says_what_was_checksum_verified(self):
+        """pii_verified (checksum-passed card/Aadhaar counts) has to survive
+        into the sanitizer report -- it used to reach Observation and then get
+        silently dropped before anything downstream (audit, compliance report)
+        could see it."""
+        o = obs(pii_redactions={"CARD": 2, "AADHAAR": 1},
+                pii_verified={"CARD": 1, "AADHAAR": 1})
+        _, report = sanitize_observation(o.model_copy(deep=True))
+        assert report["pii_verified"] == {"CARD": 1, "AADHAAR": 1}
+
 
 # --- the gate: page content cannot reach the outside world -----------------
 class TestCapabilityGate:

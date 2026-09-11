@@ -4,40 +4,151 @@
 <meta charset="utf-8">
 <title>Customer record - PII redaction fixture</title>
 <style>
-  body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; padding:40px; background:#fafbfc; color:#111; }
-  .card { max-width:560px; background:#fff; border:1px solid #e3e6ea; border-radius:10px; padding:24px 28px; }
-  h1 { font-size:19px; margin:0 0 18px; }
-  dt { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:#778; margin-top:14px; }
-  dd { margin:3px 0 0; font-size:15px; font-family:ui-monospace, Menlo, Consolas, monospace; }
-  label { display:block; font-size:12px; color:#556; margin:16px 0 5px; font-weight:600; }
-  input { width:100%; padding:9px 11px; border:1px solid #d5dae0; border-radius:6px; box-sizing:border-box; }
-  .note { margin-top:22px; font-size:12px; color:#667; line-height:1.5; }
+  :root {
+    --ink:#0f172a; --muted:#64748b; --line:#e5e8ec; --bg:#f7f8fa;
+    --accent:#dc2626; --accent-soft:#fef2f2; --safe:#059669; --safe-soft:#ecfdf5;
+  }
+  * { box-sizing:border-box; }
+  body { font-family:system-ui,-apple-system,'Segoe UI',sans-serif; padding:44px 20px; background:var(--bg); color:var(--ink); }
+  svg { display:block; }
+  .card { max-width:560px; margin:0 auto; background:#fff; border:1px solid var(--line); border-radius:14px; padding:26px 30px 28px;
+          box-shadow:0 14px 36px rgba(15,23,42,.06); }
+  .rec-head { display:flex; align-items:center; gap:12px; margin-bottom:6px; }
+  .rec-avatar {
+    width:40px; height:40px; border-radius:11px; background:linear-gradient(135deg,#475569,#1e293b);
+    color:#fff; display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  }
+  h1 { font-size:18.5px; margin:0; font-weight:750; }
+  .rec-sub { font-size:12px; color:var(--muted); margin:2px 0 0; }
+
+  .field-grid { margin-top:20px; border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  .field-row { display:flex; align-items:center; justify-content:space-between; gap:14px;
+               padding:12px 16px; border-bottom:1px solid #f1f3f6; background:#fff; }
+  .field-row:last-child { border-bottom:none; }
+  .field-row.sensitive { background:var(--accent-soft); }
+  .field-row.safe { background:var(--safe-soft); }
+  .field-label-wrap { display:flex; align-items:center; gap:9px; min-width:0; }
+  .field-ico {
+    width:26px; height:26px; border-radius:7px; flex-shrink:0; display:flex; align-items:center; justify-content:center;
+    background:#eef0f3; color:#64748b;
+  }
+  .sensitive .field-ico { background:#fee2e2; color:var(--accent); }
+  .safe .field-ico { background:#d1fae5; color:var(--safe); }
+  .field-label { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); display:block; }
+  .field-value { font-size:13.5px; font-family:ui-monospace, Menlo, Consolas, monospace; margin-top:1px; }
+  .tag {
+    font-size:9.5px; font-weight:750; letter-spacing:.04em; padding:3px 7px; border-radius:5px; flex-shrink:0;
+  }
+  .tag.pii { background:#fecaca; color:#7f1d1d; }
+  .tag.ok { background:#a7f3d0; color:#064e3b; }
+
+  label { display:flex; align-items:center; gap:6px; font-size:12px; color:#475569; margin:18px 0 6px; font-weight:650; }
+  .field-wrap { position:relative; }
+  .field-wrap .fi { position:absolute; left:11px; top:50%; transform:translateY(-50%); color:#94a3b8; pointer-events:none; }
+  input {
+    width:100%; padding:9px 11px 9px 34px; border:1px solid var(--line); border-radius:8px; box-sizing:border-box;
+    font-size:13.5px; outline:none; transition:border-color .15s, box-shadow .15s;
+  }
+  input:focus { border-color:#94a3b8; box-shadow:0 0 0 3px rgba(100,116,139,.14); }
+
+  .note {
+    margin-top:22px; font-size:12px; color:#475569; line-height:1.6; background:#f8fafc;
+    border:1px solid var(--line); border-radius:10px; padding:12px 14px; display:flex; gap:10px;
+  }
+  .note svg { flex-shrink:0; color:#64748b; margin-top:1px; }
 </style>
 </head>
 <body>
   <div class="card">
-    <h1>Customer record</h1>
-    <dl>
-      <dt>Email</dt><dd>test@a.com</dd>
-      <dt>Card on file</dt><dd>4111 1111 1111 1111</dd>
-      <dt>Phone</dt><dd>+91 9876543210</dd>
-      <dt>PAN</dt><dd>ABCDE1234F</dd>
-      <dt>Aadhaar</dt><dd>4321 8765 2109</dd>
-      <dt>UPI</dt><dd>customer@okhdfcbank</dd>
-      <dt>Order total</dt><dd>&#8377;1,799</dd>
+    <div class="rec-head">
+      <span class="rec-avatar" aria-hidden="true">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      </span>
+      <div>
+        <h1>Customer record</h1>
+        <p class="rec-sub">Internal support view &middot; account #48213</p>
+      </div>
+    </div>
+
+    <dl class="field-grid" style="margin:0; display:block;">
+      <div class="field-row sensitive">
+        <div class="field-label-wrap">
+          <span class="field-ico" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 6-10 7L2 6"/></svg></span>
+          <div><dt class="field-label">Email</dt><dd class="field-value">test@a.com</dd></div>
+        </div>
+        <span class="tag pii">PII</span>
+      </div>
+      <div class="field-row sensitive">
+        <div class="field-label-wrap">
+          <span class="field-ico" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg></span>
+          <div><dt class="field-label">Card on file</dt><dd class="field-value">4111 1111 1111 1111</dd></div>
+        </div>
+        <span class="tag pii">PII</span>
+      </div>
+      <div class="field-row sensitive">
+        <div class="field-label-wrap">
+          <span class="field-ico" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.362 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.338 1.85.573 2.81.7A2 2 0 0 1 22 16.92Z"/></svg></span>
+          <div><dt class="field-label">Phone</dt><dd class="field-value">+91 9876543210</dd></div>
+        </div>
+        <span class="tag pii">PII</span>
+      </div>
+      <div class="field-row sensitive">
+        <div class="field-label-wrap">
+          <span class="field-ico" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h10M7 12h6"/></svg></span>
+          <div><dt class="field-label">PAN</dt><dd class="field-value">ABCDE1234F</dd></div>
+        </div>
+        <span class="tag pii">PII</span>
+      </div>
+      <div class="field-row sensitive">
+        <div class="field-label-wrap">
+          <span class="field-ico" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h10M7 12h6"/></svg></span>
+          <div><dt class="field-label">Aadhaar</dt><dd class="field-value">4321 8765 2109</dd></div>
+        </div>
+        <span class="tag pii">PII</span>
+      </div>
+      <div class="field-row sensitive">
+        <div class="field-label-wrap">
+          <span class="field-ico" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span>
+          <div><dt class="field-label">UPI</dt><dd class="field-value">customer@okhdfcbank</dd></div>
+        </div>
+        <span class="tag pii">PII</span>
+      </div>
+      <div class="field-row safe">
+        <div class="field-label-wrap">
+          <span class="field-ico" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-3"/></svg></span>
+          <div><dt class="field-label">Order total</dt><dd class="field-value">&#8377;1,799</dd></div>
+        </div>
+        <span class="tag ok">TASK DATA</span>
+      </div>
     </dl>
 
-    <label for="pw">Account password</label>
-    <input id="pw" name="password" type="password" value="hunter2placeholder">
+    <label for="pw">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      Account password
+    </label>
+    <div class="field-wrap">
+      <span class="fi" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+      <input id="pw" name="password" type="password" value="hunter2placeholder">
+    </div>
 
-    <label for="otp">One-time code</label>
-    <input id="otp" name="otp" value="778211">
+    <label for="otp">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+      One-time code
+    </label>
+    <div class="field-wrap">
+      <span class="fi" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span>
+      <input id="otp" name="otp" value="778211">
+    </div>
 
-    <p class="note">
-      Every value above should reach the server as [REDACTED:TYPE]. The two field
-      values below the line should arrive only as "[PROTECTED INPUT] len=N".
-      The order total is deliberately NOT redacted &mdash; prices are task data.
-    </p>
+    <div class="note">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+      <span>
+        Every value tagged <strong>PII</strong> above should reach the server as
+        <code>[REDACTED:TYPE]</code>. The password and one-time code fields below the line
+        should arrive only as <code>[PROTECTED INPUT] len=N</code>. The order total is
+        deliberately <strong>not</strong> redacted &mdash; prices are task data.
+      </span>
+    </div>
   </div>
 </body>
 </html>

@@ -107,12 +107,43 @@ class Observation(BaseModel):
     screenshot: Optional[str] = None
     screenshot_error: Optional[str] = None
     sensitive_boxes: List[List[int]] = Field(default_factory=list)
+    # Count of QR codes found and blacked out on this capture (jsQR, run on
+    # the raw bitmap before any masking). A payment/UPI QR is PII that only
+    # ever exists as pixels -- no DOM-text pattern could catch it. The
+    # decoded content is never read past finding its location.
+    qr_detected: int = 0
+    # Words read off the (already-redacted) screenshot by the on-device OCR
+    # engine -- text baked into a canvas, an image, or anything else the DOM
+    # walker cannot see as text. Only populated on steps that also captured a
+    # screenshot; see agent-background.js's runOcr / offscreen.js.
+    ocr_regions: List[Dict[str, Any]] = Field(default_factory=list)
+    ocr_error: Optional[str] = None
+    ocr_ms: Optional[int] = None
+    # VERIFY: true when the on-device re-OCR pass read a PII shape off the
+    # ALREADY-REDACTED screenshot -- proof the visual mask missed something.
+    # When true, `screenshot` is withheld (fail-closed), never sent "mostly
+    # redacted". `ocr_leak_kinds` names the KIND only (EMAIL, CARD, ...),
+    # never the value.
+    ocr_leak_detected: bool = False
+    ocr_leak_kinds: List[str] = Field(default_factory=list)
+    # eid -> cosine similarity (0..1) between that element's cropped screenshot
+    # region and the current plan step's goal text, from an on-device CLIP
+    # pass. A PERCEPTION signal only -- the executor still only ever acts on a
+    # real eid from interactive_elements, never a pixel coordinate.
+    visual_scores: Dict[str, float] = Field(default_factory=dict)
+    visual_error: Optional[str] = None
+    visual_ms: Optional[int] = None
     errors: List[str] = Field(default_factory=list)
     # DISTINCT values hidden, per kind. The number of PLACES each was hidden
     # in is separate: one phone number nested in a dozen containers is one
     # secret, not a dozen, and reporting it as a dozen made the panel useless.
     pii_redactions: Dict[str, int] = Field(default_factory=dict)
     pii_occurrences: Dict[str, int] = Field(default_factory=dict)
+    # Of the pii_redactions counts, how many passed a real checksum (Luhn for
+    # card numbers, Verhoeff for Aadhaar) rather than just matching the shape.
+    # A redacted value is always masked either way -- this is a precision
+    # signal, not a safety gate.
+    pii_verified: Dict[str, int] = Field(default_factory=dict)
     # What each blacked-out box covers. The KIND and its position, never the
     # value -- so a claim of redaction can actually be checked.
     masked_regions: List[Dict[str, Any]] = Field(default_factory=list)

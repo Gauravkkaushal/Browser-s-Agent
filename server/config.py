@@ -9,7 +9,7 @@ load_dotenv()
 PORT = int(os.getenv("PORT", "8787"))
 HOST = os.getenv("HOST", "127.0.0.1")
 
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini,groq,openrouter,openai,ollama").lower()
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama,gemini,groq,openrouter,openai").lower()
 
 # ---- OpenRouter (OpenAI-compatible). Several keys rotate on rate limits. ----
 OPENROUTER_API_KEYS = [
@@ -54,9 +54,12 @@ GEMINI_REASONER_MODELS = [m.strip() for m in os.getenv(
     "gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-flash-lite-latest,gemini-3.6-flash",
 ).split(",") if m.strip()]
 
-# ---- Ollama ----
+# ---- Ollama (the on-device rung) ----
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+# A small quantized vision-language model. Used automatically whenever a step
+# carries a screenshot -- `ollama pull moondream` (~1.7GB) is enough to try it.
+OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "moondream")
 
 # ---- Loop guards ----
 # Somewhere harmless to stand when the browser has no ordinary page open at
@@ -75,6 +78,13 @@ CONFIRM_TIMEOUT_S = float(os.getenv("CONFIRM_TIMEOUT_S", "900"))
 LOGIN_TIMEOUT_S = float(os.getenv("LOGIN_TIMEOUT_S", "300"))
 LOGIN_POLL_S = float(os.getenv("LOGIN_POLL_S", "3"))
 SCREENSHOT_EVERY = int(os.getenv("SCREENSHOT_EVERY", "5"))
+# A real, measured number, not an aspirational one: the full-tier (tier 0)
+# reasoner payload -- objective, plan, history, the whole elements digest --
+# typically runs several KB to a few tens of KB on an ordinary page. Anything
+# over this is surfaced as a PAYLOAD_BUDGET_EXCEEDED event (informational,
+# never blocking -- refusing to send a real step to save a few KB would trade
+# task success for a vanity number).
+PAYLOAD_BUDGET_KB = int(os.getenv("PAYLOAD_BUDGET_KB", "50"))
 ACTION_RETRIES = int(os.getenv("ACTION_RETRIES", "2"))
 MAX_CONSECUTIVE_VERIFY_FAILURES = int(os.getenv("MAX_CONSECUTIVE_VERIFY_FAILURES", "3"))
 OBSERVATION_MAX_AGE_S = float(os.getenv("OBSERVATION_MAX_AGE_S", "5"))
@@ -85,11 +95,19 @@ BRIDGE_TIMEOUT_S = float(os.getenv("BRIDGE_TIMEOUT_S", "90"))
 SLOW_PAGE_PATIENCE_S = float(os.getenv("SLOW_PAGE_PATIENCE_S", "25"))
 
 # ---- On-device reasoning (Chrome Nano / window.ai) ----
-# Disabled by default: the API is experimental and almost never available in
-# production Chrome builds. When enabled, every step tries a bridge round-trip
-# BEFORE the cloud model -- useful only if you have confirmed window.ai works
-# in your browser. Set LOCAL_REASON_ENABLED=true in .env to turn it on.
-LOCAL_REASON_ENABLED = os.getenv("LOCAL_REASON_ENABLED", "false").lower() == "true"
+# On by default: every step first tries a bridge round-trip to Chrome's
+# built-in model before anything else. When that API is unavailable (most
+# Chrome builds), the attempt fails fast (~100-300ms) and control falls
+# through to the vision-capable local Ollama rung, then the cloud chain. Set
+# LOCAL_REASON_ENABLED=false to skip straight to Ollama/cloud.
+LOCAL_REASON_ENABLED = os.getenv("LOCAL_REASON_ENABLED", "true").lower() == "true"
+
+# Send the redacted screenshot to the reasoner alongside the DOM digest so it
+# can ground actions in what the page actually looks like -- canvas UIs,
+# shadow DOM and other places the DOM walker alone under-reports. Only fires
+# on steps that already captured a screenshot (SCREENSHOT_EVERY), so it does
+# not add extra capture cost.
+VISION_REASONING_ENABLED = os.getenv("VISION_REASONING_ENABLED", "true").lower() == "true"
 
 # ---- Audit ----
 AUDIT_DIR = Path(os.getenv("AUDIT_DIR", str(Path.home() / ".browser-agent" / "tasks")))

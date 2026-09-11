@@ -24,6 +24,9 @@
     "service_worker": "agent-background.js",
     "type": "module"
   },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*"
+  },
   "content_scripts": [
     {
       "matches": [
@@ -45,7 +48,8 @@
     "notifications",
     "debugger",
     "downloads",
-    "microphone"
+    "microphone",
+    "offscreen"
   ],
   "host_permissions": [
     "<all_urls>"

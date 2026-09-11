@@ -184,10 +184,15 @@ class BrowserBridge:
     # -- typed helpers ------------------------------------------------------
     async def observe(self, task_id: Optional[str] = None, screenshot: bool = False,
                       tab_id: Optional[int] = None, privacy_mode: str = "balanced",
-                      keep_terms: Optional[list] = None) -> Observation:
+                      keep_terms: Optional[list] = None, visual_query: str = "") -> Observation:
         raw = await self.request("observe", {
             "screenshot": screenshot, "tab_id": tab_id,
             "privacy_mode": privacy_mode, "keep_terms": keep_terms or [],
+            # What the current plan step is looking for, in plain English --
+            # only used when a screenshot is also being taken this step. The
+            # on-device CLIP pass scores DOM candidates against this text; it
+            # is never sent anywhere off the machine.
+            "visual_query": visual_query,
         }, task_id=task_id)
         obs = Observation.model_validate(raw)
         await self._warn_if_stale(obs, task_id)

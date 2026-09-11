@@ -29,6 +29,24 @@ describe('extension manifest', () => {
     expect(manifest.background.type).toBe('module')
   })
 
+  it('declares an explicit CSP restricting network access to the local server only', () => {
+    const csp = manifest.content_security_policy?.extension_pages as string
+    expect(csp).toBeTruthy()
+    expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval'")
+    expect(csp).toContain("object-src 'self'")
+    // Loopback only, any port -- covers a user-configured PORT without
+    // opening connect-src to an arbitrary remote host.
+    expect(csp).toContain('http://127.0.0.1:*')
+    expect(csp).toContain('http://localhost:*')
+    expect(csp).toContain('ws://127.0.0.1:*')
+    expect(csp).toContain('ws://localhost:*')
+    // No standalone "*" token in connect-src (any-host-any-port) -- only
+    // host-scoped "host:*" (any-port-on-that-host) entries are allowed.
+    const connectSrc = csp.split('connect-src')[1] || ''
+    const tokens = connectSrc.trim().split(/\s+/)
+    expect(tokens).not.toContain('*')
+  })
+
   it('ships both agent scripts', () => {
     for (const f of ['agent-content.js', 'agent-background.js']) {
       expect(fs.existsSync(path.resolve(__dirname, '../../public', f))).toBe(true)
