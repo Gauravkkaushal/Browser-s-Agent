@@ -538,13 +538,19 @@
 }
 
 .composer-input.ant-input {
-  padding: 2px 0;
+  padding: 4px 0;
   border: 0;
   background: transparent;
   color: #f3f4f6;
   font-size: 0.95rem;
-  line-height: 1.45;
+  line-height: 1.5;
   box-shadow: none;
+  /* autoSize drives the height, but a floor keeps the box from collapsing to a
+     single line before the first keystroke -- a long command needs to look
+     like it has somewhere to go. */
+  min-height: 4.5em;
+  max-height: 42vh;
+  overflow-y: auto;
   resize: none;
 }
 

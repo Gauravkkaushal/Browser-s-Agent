@@ -23,7 +23,7 @@ import './jsqr/jsQR.js'
 // unless something says so out loud. The content script has carried a build id
 // for exactly this reason; the worker had none, so every fix to tab resolution
 // (which lives HERE) was unverifiable from the outside.
-const AGENT_SW_BUILD = 'sw-b5-new-task-readable-tab'
+const AGENT_SW_BUILD = 'sw-b6-paste-table-page-verb'
 
 const DEFAULT_SERVER = 'ws://127.0.0.1:8787/ws/agent'
 const KEEPALIVE_MS = 20000
@@ -695,7 +695,7 @@ async function uploadFile(tabId, eid, filePath) {
 // ---------------------------------------------------------------------------
 // BRIDGE REQUEST DISPATCH
 // ---------------------------------------------------------------------------
-const PAGE_VERBS = ['click', 'type', 'keypress', 'scroll', 'hover', 'focus', 'select', 'wait', 'extract', 'submit', 'dismiss_overlay']
+const PAGE_VERBS = ['click', 'type', 'keypress', 'scroll', 'hover', 'focus', 'select', 'wait', 'extract', 'submit', 'paste_table', 'dismiss_overlay']
 
 // Verbs whose whole point may be to leave the current page.
 const CAN_NAVIGATE = ['click', 'submit', 'keypress']

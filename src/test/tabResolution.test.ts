@@ -126,3 +126,34 @@ describe('resolveTabId', () => {
     await expect(resolveTabId(null)).rejects.toThrow(/chrome:/)
   })
 })
+
+/**
+ * A page verb has to be listed in THREE places to work: the server's
+ * ALLOWED_ACTIONS, the service worker's PAGE_VERBS gate, and the content
+ * script's execute() switch. Miss the middle one and the verb is rejected at
+ * the bridge with "not a page verb", which looks nothing like a missing
+ * implementation and costs an afternoon.
+ */
+describe('page verbs are routable end to end', () => {
+  const CONTENT = fs.readFileSync(
+    path.resolve(__dirname, '../../public/agent-content.js'),
+    'utf8',
+  )
+
+  function pageVerbs(): string[] {
+    const m = /const PAGE_VERBS = \[([^\]]*)\]/.exec(SOURCE)
+    if (!m) throw new Error('no PAGE_VERBS in the service worker')
+    return (m[1].match(/'([^']+)'/g) || []).map((s) => s.slice(1, -1))
+  }
+
+  it('every verb the worker forwards is handled by the content script', () => {
+    for (const verb of pageVerbs()) {
+      expect(CONTENT, `execute() has no case for '${verb}'`)
+        .toContain(`case '${verb}':`)
+    }
+  })
+
+  it('routes paste_table, which the spreadsheet path depends on', () => {
+    expect(pageVerbs()).toContain('paste_table')
+  })
+})

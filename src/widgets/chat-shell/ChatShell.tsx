@@ -497,9 +497,14 @@ export function ChatShell({
 
         <Input.TextArea
           aria-label="Ask NetraShield"
-          autoSize={{ minRows: 1, maxRows: 4 }}
+          autoSize={{ minRows: 3, maxRows: 10 }}
           className={`composer-input${stt.status === 'listening' ? ' composer-input--listening' : ''}`}
-          maxLength={240}
+          // A real task command carries a URL or two, the columns wanted and
+          // the shape of the answer, and goes well past 240 characters. The old
+          // cap did not warn or wrap -- it silently dropped the tail, so a
+          // pasted command arrived at the planner cut off mid-word and the
+          // agent worked, correctly and confidently, from half an instruction.
+          maxLength={4000}
           onChange={(event) => onTaskChange(event.target.value)}
           onKeyDown={handleComposerKeyDown}
           placeholder={

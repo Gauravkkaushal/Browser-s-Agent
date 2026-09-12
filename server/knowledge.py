@@ -17,7 +17,10 @@ HINT_PACKS: Dict[str, str] = {
     "web.whatsapp.com": (
         "This is a chat application.\n"
         "- The contact/chat search control is a button or textbox whose accessible "
-        "name mentions 'Search'. Click it, then type the contact name.\n"
+        "name mentions 'Search' -- usually 'Search or start new chat' or 'Search "
+        "input textbox'. Click it, then type the contact name. Typing a contact's "
+        "name there is a search, not a message: it is not delivered to anyone, so "
+        "it does not need the quoter.\n"
         "- Search results and conversations are elements with role=listitem. Pick the "
         "one whose name matches the contact, then click it to open the conversation.\n"
         "- THE CONVERSATION IS ALREADY OPEN if an editable textbox named like "
@@ -124,6 +127,71 @@ HINT_PACKS: Dict[str, str] = {
         "- Any file it produces appears as a download link in the reply; click it "
         "and then use list_downloads to find the saved path."
     ),
+    "earthquake.usgs.gov": (
+        "This is the Latest Earthquakes map, with a list panel beside it.\n"
+        "- THE FEED IS SET BY THE URL. Do not click through the settings menu: "
+        "navigate straight to a URL that already says what you want. The "
+        "parameters are `range` (day|week|month), `magnitude` "
+        "(all|1|2.5|4.5|significant) and `list` (true|false). For the past "
+        "day's larger quakes, that is:\n"
+        "  https://earthquake.usgs.gov/earthquakes/map/?range=day&magnitude=4.5&list=true\n"
+        "  This is one navigate instead of four clicks in a menu, and it "
+        "cannot half-apply the way a menu can.\n"
+        "- USGS offers no 4.0 threshold; 4.5 is the next one up. For 'the "
+        "biggest few of the day' that makes no difference, because the largest "
+        "quakes in any 24 hours are essentially always above 4.5. Say which "
+        "threshold you used when you report the answer.\n"
+        "- The map is a canvas. Nothing on it can be read or clicked usefully. "
+        "ALL the data is in the LIST panel -- work there and ignore the map.\n"
+        "- The page is an Angular application: the list arrives AFTER the first "
+        "load. If the first observation shows no rows, `wait` for text like "
+        "'earthquakes' or a count to appear before extracting. Do not conclude "
+        "the list is missing from one early observation.\n"
+        "- Each row reads roughly 'M 4.6 - 10 km NE of <place>' with a time. "
+        "`extract` reads these rows: the magnitude comes back as `number`, the "
+        "whole row as `text`.\n"
+        "- With the magnitude filter already applied by the URL, a single "
+        "`extract` normally returns the entire day's list, so ranking and "
+        "picking the top N is something you do YOURSELF from `number`. Do not "
+        "try to sort the page.\n"
+        "- If the list is longer than one extract, scroll the list panel and "
+        "extract again rather than guessing at what you cannot see."
+    ),
+    "docs.google.com": (
+        "This is a Google Docs/Sheets/Slides editor.\n"
+        "- IN SHEETS, THE GRID IS A CANVAS. There are no cell elements. Do not "
+        "look for a cell in the observation, do not try to `click` a cell, and "
+        "do not try to `type` into one -- none of that exists to be resolved.\n"
+        "- A brand-new spreadsheet is at https://sheets.new -- navigating there "
+        "creates one and opens it, which is faster and far more reliable than "
+        "clicking through Drive.\n"
+        "- ON A NEW SHEET, CELL A1 IS ALREADY SELECTED. So the whole job is two "
+        "actions: navigate to sheets.new, then ONE `paste_table` with the table "
+        "as tab-separated text, header row first. Do not click anything in "
+        "between -- clicking is what loses the grid's focus.\n"
+        "- Only if you need a cell OTHER than A1: click the Name Box (the small "
+        "box above the top-left of the grid, left of the formula bar, showing "
+        "something like 'A1'), `type` the cell reference, press Enter, then "
+        "paste.\n"
+        "- paste_table succeeds when the grid consumes the paste. If it reports "
+        "that nothing accepted the paste, the grid did not have focus: click "
+        "once on the grid area or use the Name Box, then retry ONCE.\n"
+        "- IF THE PASTE STILL WILL NOT LAND, `fail` AND SAY SO. Do NOT fall "
+        "back to `type`. There is no cell element to type into, so typing "
+        "lands somewhere else on the page and can still read back as though it "
+        "worked -- which turns a visible failure into a false report of a table "
+        "that was never written. A task reported as failed is recoverable; a "
+        "task reported as done when the sheet is empty is not.\n"
+        "- Never type a multi-line block (rows separated by newlines) into any "
+        "single field. A field holds one value; rows are what paste_table is "
+        "for.\n"
+        "- The first row of the pasted table is treated as a header and comes "
+        "out bold. You do not need a separate formatting step.\n"
+        "- Sheets saves by itself. There is no Save button to hunt for; "
+        "'All changes saved in Drive' in the page text is the confirmation.\n"
+        "- Rename the file by clicking the title at the top left and typing.\n"
+        "- In DOCS, the body IS editable text, so `type` works there normally."
+    ),
     "www.google.com": (
         "This is a web search engine.\n"
         "- The search control is a textbox named 'Search' or 'q'. Type the query then "
@@ -143,6 +211,10 @@ ALIASES: Dict[str, str] = {
     "google.com": "www.google.com",
     "www.google.co.in": "www.google.com",
     "accounts.google.com": "mail.google.com",
+    "sheets.google.com": "docs.google.com",
+    "docs.google.com.": "docs.google.com",
+    "sheets.new": "docs.google.com",
+    "www.earthquake.usgs.gov": "earthquake.usgs.gov",
 }
 
 GENERIC_HINTS = (

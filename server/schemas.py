@@ -166,7 +166,7 @@ class Observation(BaseModel):
 ALLOWED_ACTIONS = [
     "navigate", "open_tab", "switch_tab", "close_tab", "back", "forward",
     "click", "type", "keypress", "scroll", "hover", "focus", "select",
-    "wait", "extract", "screenshot", "submit",
+    "wait", "extract", "screenshot", "submit", "paste_table",
     "fill_credential", "download", "upload_file", "list_downloads",
     "replan", "note", "request_quoted_message",
     "finish", "fail",
@@ -224,6 +224,9 @@ class ActionParams(BaseModel):
     filename_contains: Optional[str] = None
     expected: Optional[ExpectedState] = None
     purpose: Optional[str] = None
+    # paste_table: set False when the pasted block has no header row, so the
+    # first row is not rendered as one.
+    header: Optional[bool] = None
 
 
     # --- Shapes the model gets wrong, corrected instead of fatal ------------

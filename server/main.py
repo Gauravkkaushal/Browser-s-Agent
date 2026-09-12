@@ -214,6 +214,18 @@ async def fixture_shop():
     return HTMLResponse(_read(FIXTURES, "shop.html"))
 
 
+@app.get("/fixtures/quakes", response_class=HTMLResponse)
+async def fixture_quakes():
+    """A list of records with no prices anywhere, beside a canvas 'map'.
+
+    Offline stand-in for a live-data site, and the regression fixture for the
+    extractor: it used to require a price on every candidate, so a page shaped
+    like this one returned nothing at all -- which also meant its data could
+    never be written anywhere, because extraction is what puts a value on the
+    record for the capability gate."""
+    return HTMLResponse(_read(FIXTURES, "quakes.html"))
+
+
 @app.get("/fixtures/upload", response_class=HTMLResponse)
 async def fixture_upload():
     return HTMLResponse(_read(FIXTURES, "upload.html"))

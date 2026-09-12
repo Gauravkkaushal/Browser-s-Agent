@@ -75,3 +75,42 @@ def test_aadhaar_demo_value_is_genuinely_checksum_valid():
     for i, ch in enumerate(reversed(digits)):
         c = d_table[c][p_table[i % 8][int(ch)]]
     assert c == 0, "aadhaar demo value must be Verhoeff-valid (checksum digit 0)"
+
+
+def test_quakes_fixture_is_served_and_carries_no_prices():
+    """The extractor's regression fixture. Its whole value is that it is a
+    repeated list with NO price anywhere: the old extractor required one on
+    every candidate, so a page like this yielded nothing. If a currency symbol
+    ever crept in, the fixture would start passing for the wrong reason."""
+    import re
+
+    from fastapi.testclient import TestClient
+    from server.main import app
+
+    client = TestClient(app)
+    r = client.get("/fixtures/quakes")
+    assert r.status_code == 200
+    assert "Latest Earthquakes" in r.text
+    assert not re.search(r"[₹$€£]|\bINR\b|\bRs\.?\s*\d", r.text)
+
+    # Enough repeated rows for the >=3 group rule, with the largest first
+    # magnitude the smoke task asserts on.
+    assert r.text.count('class="quake"') >= 10
+    assert "6.4" in r.text
+
+
+def test_the_quakes_smoke_task_points_at_the_fixture_that_exists():
+    """A smoke task naming a URL the server does not serve fails in a way that
+    looks like an agent bug, which is the most expensive kind of false alarm."""
+    import json
+    from pathlib import Path
+
+    tasks = json.loads(
+        (Path(__file__).parent.parent / "eval" / "smoke_tasks.json")
+        .read_text(encoding="utf-8"))["tasks"]
+    task = next(t for t in tasks if t["id"] == "extract-unpriced-list")
+    assert "/fixtures/quakes" in task["command"]
+
+    from fastapi.testclient import TestClient
+    from server.main import app
+    assert TestClient(app).get("/fixtures/quakes").status_code == 200

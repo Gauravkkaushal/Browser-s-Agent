@@ -96,6 +96,17 @@ def evaluate(action: ActionProposal, observation: Optional[Observation]) -> Poli
             reason="rewrites the plan around what was just read; touches nothing",
         )
 
+    # The loop handles this one before policy is consulted, so this branch is
+    # not on the live path today. It is here because the other two control
+    # verbs are, and a verb that falls through to "no policy class matched" is
+    # one refactor away from being refused for reasons nobody intended.
+    if verb == "request_quoted_message":
+        return PolicyDecision(
+            decision="allow", risk="low",
+            rules_fired=["control-verb:request_quoted_message"],
+            reason="asks the quoter for wording; reaches no page and sends nothing",
+        )
+
     # ---- Terminal verbs report the outcome; they touch nothing -------------
     if verb in ("finish", "fail"):
         return PolicyDecision(
@@ -273,6 +284,17 @@ def evaluate(action: ActionProposal, observation: Optional[Observation]) -> Poli
             reason="typing into a field that is not protected",
         )
 
+    # ---- LOW: writing a block of cells into a document ---------------------
+    #
+    # Same class as `type`: it puts text the agent chose into a document and
+    # commits nothing on its own. The capability gate has already vouched the
+    # content before this point, which is the check that actually matters.
+    if verb == "paste_table":
+        return PolicyDecision(
+            decision="allow", risk="low", rules_fired=["ordinary-paste"],
+            reason="writing a block of cells into a document; commits nothing",
+        )
+
     return PolicyDecision(
         decision="deny", risk="blocked", rules_fired=["unclassified-verb"],
         reason="no policy class matched '%s'" % verb,
@@ -312,6 +334,13 @@ def redact_preview(action: ActionProposal, observation: Optional[Observation] = 
     if verb == "type":
         text = action.params.text or ""
         return 'type "%s"' % (text[:120] + ("..." if len(text) > 120 else ""))
+    if verb == "paste_table":
+        # A table's shape is the useful part here; 120 characters of tabs and
+        # newlines would tell the operator nothing about what is going in.
+        rows = [r for r in (action.params.text or "").splitlines() if r.strip()]
+        cols = len(rows[0].split("\t")) if rows else 0
+        header = rows[0].replace("\t", " | ")[:80] if rows else ""
+        return "paste a %d x %d table (header: %s)" % (len(rows), cols, header)
     if verb == "navigate":
         return "navigate to " + (action.params.url or "")
     control_name = _element_name(action, observation)

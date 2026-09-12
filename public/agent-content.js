@@ -16,7 +16,7 @@
 // compares this against the file on disk and says so loudly when Chrome is
 // still running an older copy -- a stale content script looks exactly like a
 // broken agent, and that is a miserable thing to debug.
-const AGENT_BUILD = 'b19-select-error-detail'
+const AGENT_BUILD = 'b22-extract-sees-custom-elements'
 
 const AGENT_EID = 'agentEid'
 const AGENT_NID = 'agentNid'
@@ -114,8 +114,41 @@ const STRICTER_PATTERNS = [
   // date.
   { type: 'DOB', regex: /\b(?:dob|d\.?o\.?b|date of birth|born(?: on)?|birth\s*date)\b[:\s-]*\d{1,2}[/\-.]\d{1,2}[/\-.](?:19|20)?\d{2}\b/gi, from: 'balanced' },
   { type: 'ADDRESS', regex: /\b\d{1,4}[,\s]+[A-Za-z][A-Za-z\s]{3,30}(?:Road|Rd|Street|St|Lane|Nagar|Colony|Sector|Block)\b/gi, from: 'balanced' },
-  { type: 'NAME', regex: /\b[A-Z][a-z]{2,}\b/g, from: 'balanced' },
+  // A person's name is a FULL name: two or more capitalised words in a row.
+  //
+  // The old pattern was a single capitalised word of three letters or more,
+  // which is not a name detector -- it is a detector for "the first word of
+  // almost any label". Worse, it ran at `balanced`, the default, contradicting
+  // the paragraph above. So every accessible name the reasoner picks controls
+  // by was destroyed before the model ever saw it: "Search or start new chat"
+  // arrived as "[REDACTED:NAME_01] or start new chat", "Type a message" as
+  // "[REDACTED:NAME_02] a message", and "Send" as "[REDACTED:NAME_03]". The
+  // agent was left clicking by position, and the capability gate -- which
+  // reads the same name to tell a search box from a composer -- saw a field
+  // named "...or start new chat" with the word "Search" gone and refused to
+  // let a contact's name be typed into contact search.
+  { type: 'NAME', regex: /\b[A-Z][a-z]{2,}(?:[ -][A-Z][a-z]{1,}){1,3}\b/g, from: 'strict' },
 ]
+
+// The furniture of an interface, not a person. Hiding these costs the agent
+// its only means of telling one control from another and protects nobody, so a
+// NAME match containing any of them is left alone even at `strict`.
+const UI_VOCABULARY = new Set((
+  'search find filter query results send sent sending type typing message messages chat chats ' +
+  'new open close back next previous menu settings profile status home inbox outbox drafts ' +
+  'archived starred snoozed spam trash compose reply forward delete remove mute pin unpin ' +
+  'read unread online offline today yesterday voice video call attach attachment emoji sticker ' +
+  'gif document photo camera group community channel channels update updates contact contacts ' +
+  'start stop cancel confirm submit save edit add more options info help account sign login ' +
+  'logout download upload share copy link view show hide select all none page tab window ' +
+  'button textbox list item row cell dialog input label placeholder google gmail whatsapp'
+).split(' '))
+
+function looksLikeUiChrome(match) {
+  const tokens = String(match).toLowerCase().split(/[^a-z]+/).filter(Boolean)
+  if (!tokens.length) return true
+  return tokens.some((t) => UI_VOCABULARY.has(t))
+}
 
 // Words the operator used in their own command. Redacting these would make the
 // task impossible without protecting anything they have not already said.
@@ -284,6 +317,8 @@ function redact(text) {
     out = out.replace(p.regex, (match) => {
       // Never hide what the operator themselves asked for.
       if (isKept(match)) return match
+      // ...nor the interface's own furniture, which is how the agent steers.
+      if (p.type === 'NAME' && looksLikeUiChrome(match)) return match
       return surrogate(p.type, match)
     })
   }
@@ -1343,18 +1378,93 @@ function structuralKey(el) {
   return el.tagName.toLowerCase() + '|' + cls + '|' + el.children.length
 }
 
+const LEADING_NUMBER = /-?\d+(?:\.\d+)?/
+
+/**
+ * How much a repeated group looks like DATA rather than navigation.
+ *
+ * Size alone picks the site's link bar on most pages: it is the biggest
+ * repeated group there is and every member is three words long. Rows of
+ * records almost always carry a number -- a magnitude, a date, a score, a
+ * count -- and a nav bar almost never does.
+ */
+function scoreGroup(list, requirePrice) {
+  if (requirePrice) return list.length
+  let totalLen = 0
+  let withDigits = 0
+  for (const el of list) {
+    const t = (el.innerText || '').replace(/\s+/g, ' ').trim()
+    totalLen += t.length
+    if (/\d/.test(t)) withDigits += 1
+  }
+  if (totalLen / list.length < 12) return 0
+  return list.length * (1 + (withDigits / list.length) * 2)
+}
+
+/**
+ * Read a repeated list off the page.
+ *
+ * This was a shopping-card scraper and nothing else: every candidate had to
+ * contain a price, so `extract` returned zero items on any page that was not a
+ * storefront. That is not a niche gap. Extraction is how a value gets ON THE
+ * RECORD -- capability_gate treats extracted items as vouched -- so a page the
+ * extractor cannot read is a page whose data can never be typed anywhere else.
+ * A list of earthquakes, flights, fixtures or search results would be read by
+ * the agent, refused by the gate on its way out, and the task would die with
+ * the data plainly visible on screen the whole time.
+ *
+ * The priced pass still runs first and keeps its tuned price/rating parsing,
+ * because a storefront is the case most likely to also have a larger group of
+ * nav links that would win on size alone.
+ */
 function doExtract(params) {
   const maxResults = Math.min(Number(params.max_results) || 25, 25)
+  const priced = collectRepeatedGroup(params, maxResults, true)
+  if (priced.items && priced.items.length) return priced
+  const generic = collectRepeatedGroup(params, maxResults, false)
+  if (generic.items && generic.items.length) return generic
+  return {
+    items: [],
+    reason: generic.reason || priced.reason || 'no repeated group found',
+    groups_examined: generic.groups_examined || 0,
+  }
+}
+
+// Tags that are never themselves a row of data: page furniture, drawing
+// primitives and leaf controls. Everything else is a candidate, INCLUDING tags
+// this file has never heard of.
+const NOT_A_ROW = new Set([
+  'html', 'head', 'body', 'script', 'style', 'meta', 'link', 'title', 'noscript',
+  'svg', 'path', 'g', 'circle', 'rect', 'defs', 'use', 'canvas', 'img', 'picture',
+  'source', 'br', 'hr', 'input', 'textarea', 'select', 'option', 'iframe',
+])
+// Enough to cover a long list page without turning extraction into a scan of
+// the whole document on an application that renders thousands of nodes.
+const MAX_CANDIDATES = 4000
+
+function collectRepeatedGroup(params, maxResults, requirePrice) {
   const groups = new Map()
 
-  const candidates = Array.from(document.querySelectorAll('div, li, article, section, a'))
+  // A tag whitelist ('div, li, article, section, tr, a') looks reasonable and
+  // silently fails on exactly the sites worth automating. Angular and Web
+  // Component applications render rows as custom elements -- <mat-list-item>,
+  // <app-event-row> -- which match none of those names, so the extractor would
+  // walk the whole page and find nothing while the rows sat there in plain
+  // sight. Ask what an element IS, not what it is called.
+  let candidates = Array.from(document.querySelectorAll('*'))
+  if (candidates.length > MAX_CANDIDATES) candidates = candidates.slice(0, MAX_CANDIDATES)
   for (const el of candidates) {
+    if (NOT_A_ROW.has(el.tagName.toLowerCase())) continue
     if (!el.parentElement) continue
     const text = (el.innerText || '').trim()
     if (!text || text.length > 700) continue
-    if (!PRICE_REGEX.test(text)) continue
+    if (requirePrice) {
+      if (!PRICE_REGEX.test(text)) continue
+    } else if (text.length < 8) continue
     const r = el.getBoundingClientRect()
-    if (r.width < 60 || r.height < 40) continue
+    // A list row is much shorter than a product card, so the generic pass
+    // cannot inherit the card-shaped minimum height.
+    if (r.width < 60 || r.height < (requirePrice ? 40 : 18)) continue
     const key = structuralKey(el.parentElement) + '>>' + structuralKey(el)
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key).push(el)
@@ -1363,10 +1473,18 @@ function doExtract(params) {
   let best = null
   for (const [key, list] of groups.entries()) {
     if (list.length < 3) continue
-    if (!best || list.length > best.list.length) best = { key: key, list: list }
+    const score = scoreGroup(list, requirePrice)
+    if (score <= 0) continue
+    if (!best || score > best.score) best = { key: key, list: list, score: score }
   }
   if (!best) {
-    return { items: [], reason: 'no repeated priced container group with >=3 members found', groups_examined: groups.size }
+    return {
+      items: [],
+      reason: requirePrice
+        ? 'no repeated priced container group with >=3 members found'
+        : 'no repeated container group with >=3 members found',
+      groups_examined: groups.size,
+    }
   }
 
   // Gate G4: build the set of hrefs that genuinely exist in this document.
@@ -1382,12 +1500,20 @@ function doExtract(params) {
     const rawText = (el.innerText || '').trim()
     const text = rawText.replace(/\s+/g, ' ').trim()
     const priceMatch = text.match(PRICE_REGEX)
-    if (!priceMatch) continue
-    const priceInt = parseInt(String(priceMatch[0]).replace(/[^\d]/g, ''), 10)
-    if (!Number.isFinite(priceInt)) continue
+    if (requirePrice && !priceMatch) continue
+    let priceInt = priceMatch
+      ? parseInt(String(priceMatch[0]).replace(/[^\d]/g, ''), 10)
+      : null
+    if (priceInt !== null && !Number.isFinite(priceInt)) {
+      if (requirePrice) continue
+      priceInt = null
+    }
 
     const ratingMatch = text.match(/\b([0-5](?:\.\d)?)\s*(?:★|out of 5|stars?|\/\s*5)\b/i)
-      || text.match(/\b([0-5]\.\d)\b/)
+      // A bare "4.3" only means a rating on a page that sells things. On a
+      // list of earthquakes it is the magnitude, and calling it a rating
+      // would put the wrong number in the wrong column.
+      || (requirePrice ? text.match(/\b([0-5]\.\d)\b/) : null)
 
     const anchor = el.tagName.toLowerCase() === 'a' && el.href ? el : el.querySelector('a[href]')
     const url = anchor && liveHrefs.has(anchor.href) ? anchor.href : ''
@@ -1408,25 +1534,122 @@ function doExtract(params) {
     if (seenNames.has(nameKey)) continue
     seenNames.add(nameKey)
 
-    items.push({
+    const numberMatch = text.match(LEADING_NUMBER)
+
+    const item = {
       name: redact(name).slice(0, 140),
-      price_int: priceInt,
-      price_text: priceMatch[0],
+      // The whole row, and its lines. A task about something other than
+      // shopping needs the fields this parser knows nothing about -- a
+      // magnitude and a place, a departure time and a gate -- and the only
+      // honest way to carry those is to carry the row.
+      text: redact(text).slice(0, 300),
+      lines: lines.slice(0, 6).map((ln) => redact(ln).slice(0, 120)),
+      // The row's first number, whatever it means here.
+      number: numberMatch ? Number(numberMatch[0]) : null,
       rating: ratingMatch ? Number(ratingMatch[1]) : null,
       url: url,
       url_live: url !== '',
-    })
+    }
+    if (priceMatch && priceInt !== null) {
+      item.price_int = priceInt
+      item.price_text = priceMatch[0]
+    }
+    items.push(item)
   }
 
   if (params.text_contains) {
     const needle = String(params.text_contains).toLowerCase()
     return {
-      items: items.filter((i) => i.name.toLowerCase().indexOf(needle) !== -1),
+      items: items.filter((i) => (i.name + ' ' + i.text).toLowerCase().indexOf(needle) !== -1),
       group_size: best.list.length,
       filtered_by: params.text_contains,
     }
   }
-  return { items: items, group_size: best.list.length }
+  return { items: items, group_size: best.list.length, priced: requirePrice }
+}
+
+function escapeHtmlCell(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/**
+ * Put a whole table into a spreadsheet in one action.
+ *
+ * A spreadsheet grid is a <canvas>. There are no cell elements to resolve, to
+ * click or to type into, so the walker cannot see the grid and `type` has
+ * nothing to aim at. What a grid DOES have is a paste handler, because pasting
+ * a block of cells is the ordinary way people move a table into one -- and a
+ * paste carries the whole table's shape in a single event, so the row and
+ * column structure is the spreadsheet's problem rather than ours.
+ *
+ * Both flavours go on the clipboard payload. Sheets reads text/html first and
+ * gets cleaner cell boundaries from it; text/plain TSV is the fallback every
+ * grid understands, and is what a plain textarea would receive.
+ *
+ * Whether it worked is readable without looking at the canvas: a grid that
+ * handles a paste calls preventDefault on it, so dispatchEvent returns false.
+ * An unhandled paste leaves the event uncancelled, which is the honest signal
+ * that this page's grid did not take it.
+ */
+async function doPasteTable(params) {
+  const tsv = String(params.text == null ? '' : params.text).replace(/\r\n/g, '\n')
+  if (!tsv.trim()) return { handled: false, error: 'paste_table needs tab-separated text' }
+
+  const rows = tsv.split('\n').map((r) => r.split('\t'))
+  // The first row goes in as <th>. A grid that reads the HTML flavour renders
+  // those bold, so "make it a proper table" costs nothing extra and the header
+  // is distinguishable from the data without a second formatting pass.
+  const html = '<meta charset="utf-8"><table>' + rows.map((cells, i) => {
+    const tag = (i === 0 && params.header !== false) ? 'th' : 'td'
+    return '<tr>' + cells.map(
+      (c) => '<' + tag + '>' + escapeHtmlCell(c) + '</' + tag + '>',
+    ).join('') + '</tr>'
+  }).join('') + '</table>'
+
+  // Whatever holds focus after the agent selected a cell. The event bubbles
+  // and is composed, so a listener anywhere above it still sees the paste.
+  const candidates = []
+  const active = document.activeElement
+  if (active && active !== document.body) candidates.push(active)
+  const editor = document.querySelector('[contenteditable="true"], textarea')
+  if (editor && candidates.indexOf(editor) === -1) candidates.push(editor)
+  if (document.body) candidates.push(document.body)
+
+  const tried = []
+  for (const node of candidates) {
+    let dt
+    try {
+      dt = new DataTransfer()
+      dt.setData('text/plain', tsv)
+      dt.setData('text/html', html)
+    } catch (e) {
+      return { handled: false, error: 'DataTransfer unavailable: ' + e.message }
+    }
+    const ev = new ClipboardEvent('paste', {
+      clipboardData: dt, bubbles: true, cancelable: true, composed: true,
+    })
+    const uncancelled = node.dispatchEvent(ev)
+    const where = node.tagName ? node.tagName.toLowerCase() : 'unknown'
+    tried.push(where)
+    if (!uncancelled) {
+      await sleep(400)
+      return {
+        handled: true,
+        strategy: 'clipboard-paste',
+        dispatched_on: where,
+        rows: rows.length,
+        columns: rows[0] ? rows[0].length : 0,
+      }
+    }
+  }
+
+  return {
+    handled: false,
+    error: 'no element on this page handled a paste event',
+    tried: tried,
+    rows: rows.length,
+  }
 }
 
 async function doWait(params) {
@@ -1573,6 +1796,10 @@ async function execute(action) {
     case 'extract': {
       const r = doExtract(params)
       return { ok: true, result: r }
+    }
+    case 'paste_table': {
+      const r = await doPasteTable(params)
+      return { ok: !!r.handled, result: r, error: r.handled ? undefined : r.error }
     }
     case 'dismiss_overlay': {
       const r = await doDismissOverlay()

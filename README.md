@@ -69,13 +69,25 @@ enough:
 
 | Variable | Notes |
 |---|---|
-| `GROQ_API_KEY` | Fast and free-tier friendly. Default primary. |
+| `GEMINI_API_KEYS` | **Default reasoner.** Comma-separated; keys rotate on 429/503, since the free tier counts requests-per-day per key. Uses `response_mime_type: application/json` and reads attached screenshots. |
+| `GROQ_API_KEY` | Fast second. Free-tier friendly. |
 | `OPENROUTER_API_KEYS` | Comma-separated; keys rotate automatically on 402/429. |
-| `OPENAI_API_KEY` | Direct OpenAI. |
-| `GEMINI_API_KEY` | Uses `response_mime_type: application/json`. |
-| `OLLAMA_HOST` | Local fallback, `format: json`. |
+| `OPENAI_API_KEY` | Direct OpenAI. Must be an `sk-` key -- an `AQ.`-prefixed Google credential here answers 401 on every call. |
+| `OLLAMA_HOST` | Opt-in offline fallback, `format: json`. Not in the default chain. |
 
-`LLM_PROVIDER` sets the chain order (default `groq,openrouter,openai,gemini,ollama`).
+`LLM_PROVIDER` sets the chain order (default `gemini,groq,openrouter,openai`).
+
+Gemini does the reasoning. `ollama` is deliberately left out of the default
+chain: its availability check is unconditional, so listing it anywhere means it
+gets tried, and a small quantized local model choosing browser actions is
+markedly worse at the job than Gemini. Append `,ollama` to `LLM_PROVIDER` only
+if you want an offline fallback and have `ollama serve` running.
+
+`LOCAL_REASON_ENABLED` (default `false`) is a separate switch that sits *ahead*
+of the whole chain: when on, every step first asks Chrome's built-in Nano model
+over the extension bridge, and any answer it returns with confidence >= 0.55 is
+used as the action -- Gemini is never consulted for that step. Turn it on only
+after confirming `window.ai` exists in your Chrome build.
 
 **Run it:**
 

@@ -100,7 +100,23 @@ select(target.element_id, params.value)   a NATIVE <select> option only.
                               in the next observation. Never guess at a value
                               for those; pick the option element you can see.
 wait(params.timeout_ms, params.text_contains)   wait for text to appear
-extract(params.max_results)   read a repeated list of priced items off the page
+extract(params.max_results)   read a repeated list off the page -- products,
+                              search results, earthquakes, fixtures, any group
+                              of rows that repeat. Each item comes back with
+                              `text` (the whole row), `lines`, `number` (the
+                              row's first number) and, on a storefront,
+                              `price_int`/`rating`. ALWAYS use this before
+                              putting page data anywhere else: extracted values
+                              are ON THE RECORD, and values that are not on the
+                              record are refused when you try to type them out.
+paste_table(params.text)      put a whole table into a spreadsheet in ONE
+                              action. `text` is tab-separated, newline per row,
+                              header row first. A spreadsheet grid is a canvas
+                              with no cell elements, so you cannot click or
+                              type into a cell -- select the top-left cell
+                              first (see the site hints) and paste. Build the
+                              text from what you `extract`ed, never by copying
+                              the screen.
 screenshot                    capture the current view
 submit(target.element_id)     submit a form (always needs human approval)
 fill_credential(target.element_id, params.slot)

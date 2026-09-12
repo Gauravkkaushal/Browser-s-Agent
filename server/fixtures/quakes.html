@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Latest earthquakes - past day</title>
+<style>
+  :root { --ink:#0f172a; --muted:#64748b; --line:#e5e8ec; --bg:#f7f8fa; --hot:#b91c1c; --warm:#c2410c; --mild:#a16207; }
+  * { box-sizing:border-box; }
+  body { font-family:system-ui,-apple-system,'Segoe UI',sans-serif; margin:0; background:var(--bg); color:var(--ink); }
+  .shell { display:flex; max-width:1100px; margin:0 auto; min-height:100vh; }
+
+  /* The map is a canvas on the real site too. Nothing in it is readable, and
+     that is the point of this fixture: the agent has to work from the list. */
+  .map { flex:1; background:#dbeafe; position:relative; }
+  .map canvas { width:100%; height:100%; display:block; }
+  .map .overlay { position:absolute; left:14px; bottom:14px; font-size:12px; color:#1e3a8a; background:rgba(255,255,255,.85); padding:6px 10px; border-radius:6px; }
+
+  .panel { width:430px; background:#fff; border-left:1px solid var(--line); display:flex; flex-direction:column; }
+  .panel-head { padding:16px 18px 12px; border-bottom:1px solid var(--line); }
+  .panel-head h1 { font-size:15px; margin:0 0 3px; font-weight:700; }
+  .panel-head .sub { font-size:12px; color:var(--muted); }
+  .controls { display:flex; gap:10px; align-items:center; padding:10px 18px; border-bottom:1px solid var(--line); font-size:12px; }
+  .controls label { color:var(--muted); }
+
+  .list { list-style:none; margin:0; padding:0; overflow-y:auto; }
+  .quake { display:flex; gap:12px; align-items:center; padding:11px 18px; border-bottom:1px solid var(--line); }
+  .quake:hover { background:#f8fafc; }
+  .mag { width:46px; flex:none; font-size:17px; font-weight:750; text-align:right; }
+  .m6 { color:var(--hot); } .m5 { color:var(--warm); } .m4 { color:var(--mild); } .m3 { color:var(--muted); }
+  .body { min-width:0; }
+  .place { font-size:13px; font-weight:560; }
+  .when { font-size:11.5px; color:var(--muted); margin-top:2px; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="map">
+    <canvas id="quake-map" width="640" height="900"></canvas>
+    <div class="overlay">Map data rendered to canvas - not readable as text</div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h1>Latest Earthquakes</h1>
+      <div class="sub">All earthquakes, past day &middot; 12 events</div>
+    </div>
+    <div class="controls">
+      <label for="sortby">Sort by</label>
+      <select id="sortby" name="sortby">
+        <option value="newest">Newest first</option>
+        <option value="magnitude">Largest magnitude</option>
+      </select>
+    </div>
+
+    <ul class="list" id="quake-list">
+      <li class="quake"><div class="mag m6">6.4</div><div class="body"><div class="place">78 km SSW of Hihifo, Tonga</div><div class="when">2026-09-12 04:11:22 UTC</div></div></li>
+      <li class="quake"><div class="mag m5">5.9</div><div class="body"><div class="place">112 km ENE of Ternate, Indonesia</div><div class="when">2026-09-12 03:48:07 UTC</div></div></li>
+      <li class="quake"><div class="mag m5">5.6</div><div class="body"><div class="place">24 km SW of Puerto Madero, Mexico</div><div class="when">2026-09-12 02:55:41 UTC</div></div></li>
+      <li class="quake"><div class="mag m5">5.2</div><div class="body"><div class="place">South Sandwich Islands region</div><div class="when">2026-09-12 01:30:16 UTC</div></div></li>
+      <li class="quake"><div class="mag m4">4.9</div><div class="body"><div class="place">88 km W of Port-Vila, Vanuatu</div><div class="when">2026-09-12 00:12:59 UTC</div></div></li>
+      <li class="quake"><div class="mag m4">4.7</div><div class="body"><div class="place">10 km NE of Ridgecrest, California</div><div class="when">2026-09-11 22:40:03 UTC</div></div></li>
+      <li class="quake"><div class="mag m4">4.5</div><div class="body"><div class="place">63 km NNW of Hasaki, Japan</div><div class="when">2026-09-11 21:18:44 UTC</div></div></li>
+      <li class="quake"><div class="mag m4">4.2</div><div class="body"><div class="place">195 km SE of Kodiak, Alaska</div><div class="when">2026-09-11 19:02:11 UTC</div></div></li>
+      <li class="quake"><div class="mag m4">4.1</div><div class="body"><div class="place">41 km SSE of Pangai, Tonga</div><div class="when">2026-09-11 17:44:29 UTC</div></div></li>
+      <li class="quake"><div class="mag m3">3.8</div><div class="body"><div class="place">7 km NW of The Geysers, California</div><div class="when">2026-09-11 15:21:50 UTC</div></div></li>
+      <li class="quake"><div class="mag m3">3.4</div><div class="body"><div class="place">32 km E of Anchorage, Alaska</div><div class="when">2026-09-11 12:09:36 UTC</div></div></li>
+      <li class="quake"><div class="mag m3">3.1</div><div class="body"><div class="place">14 km SSW of Volcano, Hawaii</div><div class="when">2026-09-11 09:55:02 UTC</div></div></li>
+    </ul>
+  </div>
+</div>
+
+<script>
+  // Draw something map-shaped. It exists to be unreadable: the agent must take
+  // the list, exactly as it must on the real site.
+  (function () {
+    var c = document.getElementById('quake-map')
+    var g = c.getContext('2d')
+    g.fillStyle = '#dbeafe'; g.fillRect(0, 0, c.width, c.height)
+    g.strokeStyle = '#93c5fd'
+    for (var y = 0; y < c.height; y += 60) { g.beginPath(); g.moveTo(0, y); g.lineTo(c.width, y); g.stroke() }
+    for (var x = 0; x < c.width; x += 60) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, c.height); g.stroke() }
+    var pins = [[120, 210, 18], [300, 140, 16], [420, 380, 15], [210, 620, 14], [480, 700, 12], [90, 470, 11]]
+    for (var i = 0; i < pins.length; i++) {
+      g.beginPath(); g.arc(pins[i][0], pins[i][1], pins[i][2], 0, Math.PI * 2)
+      g.fillStyle = 'rgba(220,38,38,.45)'; g.fill()
+      g.strokeStyle = '#b91c1c'; g.stroke()
+    }
+  })()
+
+  // Sorting is real, so "set the sort control first" is a step that can
+  // actually be taken and actually changes what one extract reads.
+  document.getElementById('sortby').addEventListener('change', function (e) {
+    var list = document.getElementById('quake-list')
+    var rows = Array.prototype.slice.call(list.children)
+    rows.sort(function (a, b) {
+      if (e.target.value === 'magnitude') {
+        return parseFloat(b.querySelector('.mag').textContent) - parseFloat(a.querySelector('.mag').textContent)
+      }
+      return b.querySelector('.when').textContent.localeCompare(a.querySelector('.when').textContent)
+    })
+    rows.forEach(function (r) { list.appendChild(r) })
+  })
+</script>
+</body>
+</html>

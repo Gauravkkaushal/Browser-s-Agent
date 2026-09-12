@@ -161,6 +161,22 @@ class TestVerifier:
         v = verify(act("extract"), obs(), obs(), {"items": [], "reason": "no groups"})
         assert v.verdict == "failed"
 
+    def test_a_paste_the_grid_did_not_take_is_a_failure(self):
+        """A spreadsheet grid is a canvas: there is no cell to read back, so
+        the only evidence a paste landed is that the page CANCELLED it. An
+        uncancelled paste reported as success would have the agent announce a
+        table it never wrote."""
+        v = verify(act("paste_table", text="a\tb"), obs(), obs(),
+                   {"handled": False, "error": "no element handled a paste",
+                    "tried": ["body"]})
+        assert v.verdict == "failed"
+
+    def test_a_paste_the_grid_consumed_is_a_success(self):
+        v = verify(act("paste_table", text="a\tb"), obs(), obs(),
+                   {"handled": True, "rows": 6, "columns": 3,
+                    "dispatched_on": "div"})
+        assert v.verdict == "success"
+
     def test_a_navigation_that_did_not_move_is_a_failure(self):
         v = verify(act("navigate", url="https://iana.org"),
                    obs("https://example.com/"), obs("https://example.com/"), {})
@@ -185,6 +201,29 @@ class TestKnowledge:
     def test_hints_are_plain_text_advice(self):
         for url in ["https://web.whatsapp.com/", "https://mail.google.com/", "https://x.invalid/"]:
             assert isinstance(hints_for(url), str)
+
+    def test_the_sheets_pack_says_the_grid_has_no_cell_elements(self):
+        """The single most expensive thing an agent can do in Sheets is spend
+        its whole step budget looking for a cell to click. There isn't one."""
+        pack = hints_for("https://docs.google.com/spreadsheets/d/abc/edit").lower()
+        assert "canvas" in pack
+        assert "name box" in pack
+        assert "paste_table" in pack
+
+    def test_sheets_new_resolves_to_the_docs_pack(self):
+        assert hints_for("https://sheets.new") == hints_for("https://docs.google.com/x")
+
+    def test_the_usgs_pack_points_at_the_list_not_the_map(self):
+        pack = hints_for("https://earthquake.usgs.gov/earthquakes/map").lower()
+        assert "list" in pack and "canvas" in pack
+
+    def test_the_usgs_pack_sets_the_feed_by_url_not_by_menu(self):
+        """Four clicks in a settings menu is four chances to half-apply a
+        filter. The site takes the whole feed as URL parameters, so the agent
+        should be told to navigate rather than to click."""
+        pack = hints_for("https://earthquake.usgs.gov/earthquakes/map")
+        assert "range=day" in pack and "magnitude=4.5" in pack
+        assert "list=true" in pack
 
 
 # ---------------------------------------------------------------------------

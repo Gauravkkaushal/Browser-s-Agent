@@ -209,6 +209,78 @@ describe('extraction gate G4 - urls must exist in the live DOM', () => {
   })
 })
 
+/**
+ * extract used to `continue` on any candidate without a price, which made it a
+ * storefront scraper wearing a general verb's name. Because extraction is what
+ * puts a value on the record for capability_gate, a page it could not read was
+ * a page whose data could never be written anywhere else.
+ */
+describe('extraction reads any repeated list, not just priced cards', () => {
+  it('falls back to a generic group when no priced group is found', () => {
+    expect(SOURCE).toContain('collectRepeatedGroup(params, maxResults, true)')
+    expect(SOURCE).toContain('collectRepeatedGroup(params, maxResults, false)')
+  })
+
+  it('only demands a price on the priced pass', () => {
+    // The old bail-out was unconditional, which is the whole bug. It is still
+    // there, but now it is reached only when requirePrice is set.
+    expect(SOURCE).toContain('} else if (text.length < 8) continue')
+    expect(SOURCE).toContain('if (requirePrice && !priceMatch) continue')
+  })
+
+  it('carries the whole row, not just a name and a price', () => {
+    expect(SOURCE).toContain('text: redact(text).slice(0, 300)')
+    expect(SOURCE).toContain('number: numberMatch ? Number(numberMatch[0]) : null')
+  })
+
+  it('does not call a bare decimal a rating outside a storefront', () => {
+    // On an earthquake list "4.6" is the magnitude. Filing it as a rating puts
+    // the right number in the wrong column.
+    expect(SOURCE).toContain("(requirePrice ? text.match(/\\b([0-5]\\.\\d)\\b/) : null)")
+  })
+
+  it('scores data rows above nav bars instead of taking the biggest group', () => {
+    expect(SOURCE).toContain('function scoreGroup(')
+    expect(SOURCE).toContain('if (score <= 0) continue')
+  })
+
+  it('considers custom elements, not a hardcoded list of tag names', () => {
+    // Angular / Web Component apps render rows as <mat-list-item> and the
+    // like. A 'div, li, article, section, tr, a' whitelist matches none of
+    // them, so the extractor would find nothing on exactly the applications
+    // worth automating -- USGS's earthquake list among them.
+    expect(SOURCE).toContain("document.querySelectorAll('*')")
+    expect(SOURCE).toContain('NOT_A_ROW.has(el.tagName.toLowerCase())')
+    expect(SOURCE).not.toContain("querySelectorAll('div, li, article, section, tr, a')")
+  })
+
+  it('bounds the scan so a huge application does not stall it', () => {
+    expect(SOURCE).toContain('MAX_CANDIDATES')
+  })
+})
+
+describe('paste_table writes a whole table into a canvas grid', () => {
+  it('sends both TSV and an HTML table on the clipboard payload', () => {
+    expect(SOURCE).toContain("dt.setData('text/plain', tsv)")
+    expect(SOURCE).toContain("dt.setData('text/html', html)")
+  })
+
+  it('treats a cancelled paste as the proof it landed', () => {
+    // A grid that takes a paste calls preventDefault, so dispatchEvent returns
+    // false. There is no cell to read back, so this is the only honest signal.
+    expect(SOURCE).toContain('const uncancelled = node.dispatchEvent(ev)')
+    expect(SOURCE).toContain('if (!uncancelled) {')
+  })
+
+  it('reports failure rather than claiming a table it never wrote', () => {
+    expect(SOURCE).toContain("error: 'no element on this page handled a paste event'")
+  })
+
+  it('is reachable as a page verb', () => {
+    expect(SOURCE).toContain("case 'paste_table': {")
+  })
+})
+
 describe('clicking hits what the pointer is actually over', () => {
   it('dispatches on the inner node when one sits under the click point', () => {
     // Application UIs put the handler on a descendant of the row/card, so a
@@ -242,5 +314,80 @@ describe('the walker ranks before it caps', () => {
 
   it('sorts by that score so a composer is never cut off by a long sidebar', () => {
     expect(SOURCE).toContain('scored.sort((a, b) => b.score - a.score')
+  })
+})
+
+/**
+ * The name detector used to be /\b[A-Z][a-z]{2,}\b/ running at `balanced`, the
+ * default. That is not a name detector -- it matches the first word of almost
+ * any interface label -- so every accessible name reached the reasoner with its
+ * most identifying word replaced by a surrogate. The agent could not find a
+ * search box called "Search", a send button called "Send", or a composer called
+ * "Type a message", and the capability gate, reading the same mangled names,
+ * mistook WhatsApp's contact search for a message field.
+ */
+describe('the NAME detector hides people, not the interface', () => {
+  function namePattern(): RegExp {
+    const block = SOURCE.split('const STRICTER_PATTERNS = [')[1].split('\n]')[0]
+    const m = /\{\s*type:\s*'NAME',\s*regex:\s*(\/.+?\/[gimsuy]*),\s*from:\s*'(\w+)'/.exec(block)
+    if (!m) throw new Error('no NAME pattern in STRICTER_PATTERNS')
+    const body = m[1]
+    const lastSlash = body.lastIndexOf('/')
+    return new RegExp(body.slice(1, lastSlash), body.slice(lastSlash + 1))
+  }
+
+  function nameTier(): string {
+    const block = SOURCE.split('const STRICTER_PATTERNS = [')[1].split('\n]')[0]
+    const m = /type:\s*'NAME',[\s\S]*?from:\s*'(\w+)'/.exec(block)
+    return m ? m[1] : ''
+  }
+
+  it('is a strict-tier pattern, as the module comment has always claimed', () => {
+    expect(nameTier()).toBe('strict')
+  })
+
+  const LABELS = [
+    'Search or start new chat',
+    'Search input textbox',
+    'Type a message',
+    'Send',
+    'Chat list',
+    'New chat',
+    'Voice message',
+    'Archived',
+  ]
+
+  function uiVocabulary(): Set<string> {
+    const block = SOURCE.split('const UI_VOCABULARY = new Set((')[1].split(').split(')[0]
+    const words = (block.match(/'([^']*)'/g) || [])
+      .map((chunk) => chunk.slice(1, -1))
+      .join(' ')
+    return new Set(words.split(/\s+/).filter(Boolean))
+  }
+
+  /** The shipped redaction path for NAME: pattern, then the chrome guard. */
+  function redactNames(text: string): string {
+    const re = namePattern()
+    const vocab = uiVocabulary()
+    re.lastIndex = 0
+    return text.replace(re, (match) => {
+      const tokens = match.toLowerCase().split(/[^a-z]+/).filter(Boolean)
+      if (!tokens.length || tokens.some((t) => vocab.has(t))) return match
+      return '[REDACTED:NAME_01]'
+    })
+  }
+
+  it.each(LABELS)('leaves the control label %j intact', (label) => {
+    expect(redactNames(label)).toBe(label)
+  })
+
+  it('still hides a real full name', () => {
+    expect(redactNames('Harsh Dubey')).toBe('[REDACTED:NAME_01]')
+    expect(redactNames('call Gaurav Kaushal back')).toBe('call [REDACTED:NAME_01] back')
+  })
+
+  it('ships the UI-vocabulary guard that keeps control labels readable', () => {
+    expect(SOURCE).toContain('const UI_VOCABULARY')
+    expect(SOURCE).toContain("if (p.type === 'NAME' && looksLikeUiChrome(match)) return match")
   })
 })

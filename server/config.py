@@ -9,7 +9,11 @@ load_dotenv()
 PORT = int(os.getenv("PORT", "8787"))
 HOST = os.getenv("HOST", "127.0.0.1")
 
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama,gemini,groq,openrouter,openai").lower()
+# Gemini reasons by default. `ollama` is NOT in the default chain: its
+# available() check is unconditional, so listing it means it gets tried, and a
+# small quantized local model choosing browser actions is markedly worse at the
+# job than Gemini. Set LLM_PROVIDER=...,ollama in .env to opt into it.
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini,groq,openrouter,openai").lower()
 
 # ---- OpenRouter (OpenAI-compatible). Several keys rotate on rate limits. ----
 OPENROUTER_API_KEYS = [
@@ -95,12 +99,14 @@ BRIDGE_TIMEOUT_S = float(os.getenv("BRIDGE_TIMEOUT_S", "90"))
 SLOW_PAGE_PATIENCE_S = float(os.getenv("SLOW_PAGE_PATIENCE_S", "25"))
 
 # ---- On-device reasoning (Chrome Nano / window.ai) ----
-# On by default: every step first tries a bridge round-trip to Chrome's
-# built-in model before anything else. When that API is unavailable (most
-# Chrome builds), the attempt fails fast (~100-300ms) and control falls
-# through to the vision-capable local Ollama rung, then the cloud chain. Set
-# LOCAL_REASON_ENABLED=false to skip straight to Ollama/cloud.
-LOCAL_REASON_ENABLED = os.getenv("LOCAL_REASON_ENABLED", "true").lower() == "true"
+# OFF by default. When this is on, every step first takes a bridge round-trip
+# to Chrome's built-in model, and any answer it returns with confidence >= 0.55
+# is used as the action -- the provider ladder is never consulted, so Gemini
+# does not get to reason about that step at all. On the majority of Chrome
+# builds the API is simply absent and the round-trip is a wasted 100-300ms plus
+# a misleading LOCAL_REASON_UNAVAILABLE event. Turn it on only after confirming
+# window.ai works in your build and that you want it outranking Gemini.
+LOCAL_REASON_ENABLED = os.getenv("LOCAL_REASON_ENABLED", "false").lower() == "true"
 
 # Send the redacted screenshot to the reasoner alongside the DOM digest so it
 # can ground actions in what the page actually looks like -- canvas UIs,

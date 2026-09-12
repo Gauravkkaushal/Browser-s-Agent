@@ -247,6 +247,27 @@ def verify(action: ActionProposal, before: Observation, after: Observation,
         return Verdict(verdict="failed", signals=[result.get("reason", "no items")],
                        reason="nothing structured could be read from this page")
 
+    # A spreadsheet grid is a canvas, so there is no cell to read back. What
+    # there is: a grid that accepts a paste CANCELS the event. An uncancelled
+    # paste means nothing on the page took it, and saying otherwise would have
+    # the agent go on to report a table it never wrote.
+    if action.action == "paste_table":
+        if result.get("handled"):
+            return Verdict(
+                verdict="success",
+                signals=["the grid consumed the paste (%dx%d, on %s)" % (
+                    result.get("rows", 0), result.get("columns", 0),
+                    result.get("dispatched_on", "?"))],
+                reason="the page handled the paste, which a grid only does when it takes the cells",
+            )
+        return Verdict(
+            verdict="failed",
+            signals=[str(result.get("error", "paste not handled")),
+                     "tried: %s" % ", ".join(result.get("tried") or [])],
+            reason="nothing on this page accepted a paste. Select a cell first "
+                   "(use the Name Box), or this is not a grid that takes one",
+        )
+
     if action.action in ("wait", "screenshot", "scroll", "hover", "focus"):
         return Verdict(verdict="success", signals=(signals + notes) or ["no state change required"],
                        reason="%s does not require a page change" % action.action)
