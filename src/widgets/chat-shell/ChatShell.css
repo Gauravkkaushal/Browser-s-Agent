@@ -8,7 +8,12 @@
   min-height: 0;
   max-height: 600px;
   margin-left: auto;
-  overflow: hidden;
+  /* Vertical: a last-resort scroll so nothing can end up unreachable when the
+     composer is expanded and the panes below it run out of room. The flex
+     children size themselves to fit, so this normally shows no scrollbar at
+     all. Horizontal stays clipped -- a sideways scrollbar in a 390px popup is
+     always a layout bug, never something to offer the user. */
+  overflow: hidden auto;
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 0;
   background: var(--ns-bg-1);
@@ -412,24 +417,11 @@
   scrollbar-width: thin;
 }
 
-.chat-thread::-webkit-scrollbar {
-  width: 8px;
-}
-
-.chat-thread::-webkit-scrollbar-track {
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.chat-thread::-webkit-scrollbar-thumb {
-  border: 2px solid var(--ns-bg-1);
-  border-radius: 999px;
-  background: linear-gradient(180deg, #8b7bff, #4f7cff);
-}
-
-.chat-thread::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, #a190ff, #6b93ff);
-}
+/* The thread's own scrollbar rules used to live here. They are gone on
+   purpose: the identical treatment is now defined once in index.css and
+   applies to every scrollable surface, including antd's portaled drawers.
+   Keeping a near-copy here would have quietly won on specificity and left the
+   thread one shade different from the rest of the app. */
 
 .message-row {
   display: flex;

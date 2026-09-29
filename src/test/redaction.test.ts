@@ -265,15 +265,28 @@ describe('paste_table writes a whole table into a canvas grid', () => {
     expect(SOURCE).toContain("dt.setData('text/html', html)")
   })
 
-  it('treats a cancelled paste as the proof it landed', () => {
-    // A grid that takes a paste calls preventDefault, so dispatchEvent returns
-    // false. There is no cell to read back, so this is the only honest signal.
-    expect(SOURCE).toContain('const uncancelled = node.dispatchEvent(ev)')
-    expect(SOURCE).toContain('if (!uncancelled) {')
+  it('accepts a page change as proof, not only a cancelled event', () => {
+    // Google Sheets applies the cells and does NOT call preventDefault, so
+    // requiring cancellation failed a paste that had already landed -- and the
+    // agent then pasted the same table five more times.
+    expect(SOURCE).toContain('function domSignature()')
+    expect(SOURCE).toContain('const changed = domSignature() !== beforeSig')
+    expect(SOURCE).toContain('if (prevented || probeFound || changed) {')
+  })
+
+  it('judges each candidate before dispatching at the next one', () => {
+    // Dispatching at every candidate up front turns one requested paste into
+    // three on any page that handles the event at the document level.
+    expect(SOURCE).toContain('attempts.push({')
+    expect(SOURCE).toContain('on: where, default_prevented: prevented,')
+  })
+
+  it('waits for the grid to react before deciding it did nothing', () => {
+    expect(SOURCE).toContain('await sleep(700)')
   })
 
   it('reports failure rather than claiming a table it never wrote', () => {
-    expect(SOURCE).toContain("error: 'no element on this page handled a paste event'")
+    expect(SOURCE).toContain("error: 'the paste left the page completely unchanged, so nothing took it'")
   })
 
   it('is reachable as a page verb', () => {
@@ -389,5 +402,65 @@ describe('the NAME detector hides people, not the interface', () => {
   it('ships the UI-vocabulary guard that keeps control labels readable', () => {
     expect(SOURCE).toContain('const UI_VOCABULARY')
     expect(SOURCE).toContain("if (p.type === 'NAME' && looksLikeUiChrome(match)) return match")
+  })
+})
+
+/**
+ * A field holds one value. The agent reached for `type` after paste_table
+ * reported failure and typed a whole tab-separated block into cell A1: the
+ * rows collapsed, the readback still matched closely enough to pass, and the
+ * task was announced as done over a spreadsheet with one mangled cell.
+ */
+describe('typing refuses a table outright', () => {
+  const CONTENT = fs.readFileSync(
+    path.resolve(__dirname, '../../public/agent-content.js'),
+    'utf8',
+  )
+
+  // Written as a source regex rather than a literal, so the escape sequence
+  // being asserted on survives being written into this file.
+  const TAB_GUARD = /if \(String\(text\)\.indexOf\('\\t'\) !== -1\) \{/
+  const NEWLINE_GUARD = /if \(String\(text\)\.indexOf\('\\n'\) !== -1\) \{/
+
+  it('keys on a tab character, which nobody ever means to type into a field', () => {
+    expect(CONTENT).toMatch(TAB_GUARD)
+    expect(CONTENT).toContain("strategy: 'refused'")
+  })
+
+  it('points at paste_table instead of just saying no', () => {
+    expect(CONTENT).toContain('Use `paste_table` instead.')
+  })
+
+  it('leaves plain newlines alone, because a two-line message is ordinary', () => {
+    // Keying on a newline would block an ordinary two-line chat message.
+    expect(CONTENT).not.toMatch(NEWLINE_GUARD)
+  })
+})
+
+describe('a paste proves itself by its own text appearing', () => {
+  const CONTENT = fs.readFileSync(
+    path.resolve(__dirname, '../../public/agent-content.js'),
+    'utf8',
+  )
+
+  it('reads the places a canvas app keeps its current value', () => {
+    expect(CONTENT).toContain('function readableText()')
+    expect(CONTENT).toContain("document.querySelectorAll('input, textarea')")
+  })
+
+  it('uses textContent, because innerText cannot see an off-screen a11y layer', () => {
+    // The cells were in the sheet and this scan reported nothing, twice, for
+    // exactly this reason: innerText returns only RENDERED text, and that is
+    // the one place a canvas application does not keep its values.
+    expect(CONTENT).toContain('parts.push(document.body.textContent')
+    expect(CONTENT).not.toContain('parts.push(document.body.innerText')
+  })
+
+  it('only trusts a probe the page did not already contain', () => {
+    expect(CONTENT).toContain("const probeUsable = probe !== '' && readableText().indexOf(probe) === -1")
+  })
+
+  it('accepts any of the three signals, never requiring all of them', () => {
+    expect(CONTENT).toContain('if (prevented || probeFound || changed) {')
   })
 })

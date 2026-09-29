@@ -10,6 +10,7 @@ right after a navigation, where the URL is supposed to change.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -247,25 +248,62 @@ def verify(action: ActionProposal, before: Observation, after: Observation,
         return Verdict(verdict="failed", signals=[result.get("reason", "no items")],
                        reason="nothing structured could be read from this page")
 
-    # A spreadsheet grid is a canvas, so there is no cell to read back. What
-    # there is: a grid that accepts a paste CANCELS the event. An uncancelled
-    # paste means nothing on the page took it, and saying otherwise would have
-    # the agent go on to report a table it never wrote.
+    # A spreadsheet grid is a canvas, so there is no cell to read back.
+    #
+    # Two independent signs that the paste landed, and EITHER is enough. An
+    # earlier version accepted only the first and so failed a paste that had
+    # worked perfectly -- after which the agent pasted the same table five more
+    # times. Cancelling the event proves a handler took it; Google Sheets
+    # simply does not cancel, and its evidence is that the page around the
+    # canvas visibly changed.
     if action.action == "paste_table":
-        if result.get("handled"):
+        # An independent look, through the walker rather than through the
+        # content script's own idea of what counts as readable. This is the
+        # check that would have caught the case that wasted a whole run: the
+        # cells were in the sheet, the page reported nothing, and the walker
+        # could see an element named after the pasted header the entire time.
+        probe = str(result.get("probe") or "").strip()
+        seen_by_walker = False
+        if probe and len(probe) >= 4:
+            hay = " ".join([after.page_text or ""] + [
+                " ".join(filter(None, [e.name, e.value, e.text]))
+                for e in (after.interactive_elements or [])
+            ]).lower()
+            seen_by_walker = probe.lower() in hay
+
+        if (result.get("default_prevented") or result.get("probe_found")
+                or seen_by_walker or result.get("page_changed")):
+            if seen_by_walker and not result.get("probe_found"):
+                why = ("the next observation of the page contains %r, so the cells "
+                       "are in the document even though the page reported nothing"
+                       % probe)
+            elif result.get("probe_found"):
+                why = ("%r was nowhere on the page before the paste and is on it "
+                       "now, so the cells went in" % result.get("probe", ""))
+            elif result.get("default_prevented"):
+                why = ("the page cancelled the paste event, which only a handler "
+                       "that took the cells does")
+            else:
+                why = "the page changed in response to the paste"
             return Verdict(
                 verdict="success",
-                signals=["the grid consumed the paste (%dx%d, on %s)" % (
-                    result.get("rows", 0), result.get("columns", 0),
-                    result.get("dispatched_on", "?"))],
-                reason="the page handled the paste, which a grid only does when it takes the cells",
+                signals=["pasted %sx%s on %s" % (
+                    result.get("rows", "?"), result.get("columns", "?"),
+                    result.get("dispatched_on", "?")), why],
+                reason=why,
+            )
+        if not result.get("dispatched"):
+            return Verdict(
+                verdict="failed",
+                signals=[str(result.get("error", "could not dispatch a paste"))],
+                reason="the paste could not be dispatched at all",
             )
         return Verdict(
             verdict="failed",
-            signals=[str(result.get("error", "paste not handled")),
-                     "tried: %s" % ", ".join(result.get("tried") or [])],
-            reason="nothing on this page accepted a paste. Select a cell first "
-                   "(use the Name Box), or this is not a grid that takes one",
+            signals=[str(result.get("error", "paste changed nothing")),
+                     "attempts: %s" % json.dumps(result.get("attempts") or [])[:200]],
+            reason="the paste left the page untouched, so nothing took it. Select a "
+                   "cell first, and do NOT fall back to typing rows into one field",
         )
 
     if action.action in ("wait", "screenshot", "scroll", "hover", "focus"):

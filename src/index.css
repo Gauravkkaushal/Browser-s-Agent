@@ -58,3 +58,50 @@ body {
   background: rgba(139, 123, 255, 0.38);
   color: #ffffff;
 }
+
+/* ---- One scrollbar, everywhere ------------------------------------------
+   The chat thread had a brand-coloured scrollbar and nothing else did, so
+   every other scrollable surface -- the details pane, the history list, the
+   settings drawer, the composer once it grows -- fell back to the platform's
+   grey default sitting on a near-black panel. Defined on :root rather than
+   scoped to .chat-popup so antd's portaled drawers and dropdowns, which mount
+   outside the shell, are covered by the same rule.
+
+   `scrollbar-width`/`scrollbar-color` are the standard properties (Firefox and
+   newer Chromium); the ::-webkit-* block is what Chrome actually honours today
+   and carries the gradient, which the standard properties cannot express. */
+* {
+  scrollbar-color: rgba(139, 123, 255, 0.45) rgba(255, 255, 255, 0.05);
+  scrollbar-width: thin;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+::-webkit-scrollbar-thumb {
+  /* The inset border is what makes the thumb read as a floating pill rather
+     than a bar filling the gutter. It has to match the surface behind it. */
+  border: 2px solid var(--ns-bg-1);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #8b7bff, #4f7cff);
+  transition: background 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #a190ff, #6b93ff);
+}
+
+::-webkit-scrollbar-thumb:active {
+  background: linear-gradient(180deg, #b9aaff, #85a6ff);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}

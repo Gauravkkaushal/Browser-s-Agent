@@ -161,19 +161,71 @@ class TestVerifier:
         v = verify(act("extract"), obs(), obs(), {"items": [], "reason": "no groups"})
         assert v.verdict == "failed"
 
-    def test_a_paste_the_grid_did_not_take_is_a_failure(self):
-        """A spreadsheet grid is a canvas: there is no cell to read back, so
-        the only evidence a paste landed is that the page CANCELLED it. An
-        uncancelled paste reported as success would have the agent announce a
-        table it never wrote."""
+    def test_a_paste_that_changed_nothing_at_all_is_a_failure(self):
+        """A spreadsheet grid is a canvas: there is no cell to read back. If
+        neither signal fired, nothing took the cells, and reporting success
+        would have the agent announce a table it never wrote."""
         v = verify(act("paste_table", text="a\tb"), obs(), obs(),
-                   {"handled": False, "error": "no element handled a paste",
-                    "tried": ["body"]})
+                   {"dispatched": True, "default_prevented": False,
+                    "page_changed": False, "error": "nothing took it",
+                    "attempts": [{"on": "body"}]})
         assert v.verdict == "failed"
 
-    def test_a_paste_the_grid_consumed_is_a_success(self):
+    def test_a_cancelled_paste_event_is_proof_enough(self):
         v = verify(act("paste_table", text="a\tb"), obs(), obs(),
-                   {"handled": True, "rows": 6, "columns": 3,
+                   {"dispatched": True, "default_prevented": True,
+                    "page_changed": False, "rows": 6, "columns": 3,
+                    "dispatched_on": "div"})
+        assert v.verdict == "success"
+
+    def test_a_paste_proved_by_its_own_text_appearing_is_a_success(self):
+        """The signal that finally works. Sheets neither cancels the event nor
+        moves any generic page fingerprint, so both earlier proofs failed a
+        paste that had landed. But a grid holding cells has to show the active
+        cell's value somewhere readable, and that somewhere is ordinary DOM."""
+        v = verify(act("paste_table", text="Magnitude	Location"), obs(), obs(),
+                   {"dispatched": True, "default_prevented": False,
+                    "page_changed": False, "probe_found": True,
+                    "probe": "Magnitude", "rows": 6, "columns": 3,
+                    "dispatched_on": "div"})
+        assert v.verdict == "success"
+        assert "Magnitude" in " ".join(v.signals)
+
+    def test_the_walker_seeing_the_pasted_text_settles_it(self):
+        """The check that ends this argument for good.
+
+        Sheets neither cancels the event, nor moves a generic fingerprint, nor
+        exposes the cells to the content script's own text scan -- yet the
+        cells were plainly in the sheet, and the walker could see an element
+        named after the pasted header the whole time. So the server looks for
+        the probe in the observation it takes next, which is an evidence path
+        entirely independent of the page's own self-report."""
+        after = obs(elements=[el("e1", role="gridcell", name="Magnitude")])
+        v = verify(act("paste_table", text="Magnitude	Location"), obs(), after,
+                   {"dispatched": True, "default_prevented": False,
+                    "page_changed": False, "probe_found": False,
+                    "probe": "Magnitude", "rows": 6, "columns": 3,
+                    "dispatched_on": "div"})
+        assert v.verdict == "success"
+
+    def test_a_paste_nobody_can_see_anywhere_is_still_a_failure(self):
+        """The exemption must not swallow the guard: with no evidence from the
+        page AND none from the next observation, it failed."""
+        v = verify(act("paste_table", text="Magnitude	Location"), obs(), obs(),
+                   {"dispatched": True, "default_prevented": False,
+                    "page_changed": False, "probe_found": False,
+                    "probe": "Magnitude", "error": "nothing took it"})
+        assert v.verdict == "failed"
+
+    def test_a_paste_google_sheets_accepted_without_cancelling_is_a_success(self):
+        """The regression that cost six duplicate pastes. Sheets applies the
+        cells and does NOT call preventDefault, so treating cancellation as the
+        only acceptable proof failed a paste that had already worked -- and the
+        agent, told it had failed, did it again five more times. Sufficient
+        evidence must never be enforced as necessary evidence."""
+        v = verify(act("paste_table", text="a\tb"), obs(), obs(),
+                   {"dispatched": True, "default_prevented": False,
+                    "page_changed": True, "rows": 6, "columns": 3,
                     "dispatched_on": "div"})
         assert v.verdict == "success"
 

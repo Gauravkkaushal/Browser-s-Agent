@@ -90,6 +90,30 @@ def _site_of(url: str) -> str:
         return ""
 
 
+def is_oscillation(executed: List[Dict[str, str]], signature: str) -> bool:
+    """True when the proposed action would close a second lap of an A/B cycle.
+
+    The repeat detector catches an action tried over and over WITHOUT effect,
+    and it deliberately forgets any action that worked. That leaves a hole:
+    two actions that each work perfectly can still cancel each other out --
+    "Mark all present", "Clear all", "Mark all present", "Clear all" -- with
+    every one of them verifying as a success, so the page ends each lap exactly
+    where it began and nothing ever trips. From the outside that looks like the
+    agent hallucinating; it is really a two-stroke cycle the guard was blind to.
+
+    `executed` holds the actions that actually succeeded, oldest first. The
+    cycle is recognised by shape alone: A, B, A already done and B proposed.
+    """
+    recent = executed[-3:]
+    if len(recent) != 3:
+        return False
+    return (
+        recent[0]["sig"] == recent[2]["sig"]
+        and recent[1]["sig"] == signature
+        and recent[0]["sig"] != signature
+    )
+
+
 class TaskCancelled(Exception):
     pass
 
@@ -122,6 +146,10 @@ class Task:
         self.consecutive_verify_failures = 0
         self._unearned_finishes = 0
         self._recent_signatures: List[str] = []
+        # Every action that actually WORKED, in order. The repeat detector
+        # above forgets successful actions on purpose; this list does not,
+        # because two actions that each succeed can still undo each other.
+        self._executed: List[Dict[str, str]] = []
         self._last_failed_signature: str = ""
         self._dead_targets: Dict[str, str] = {}
         self._last_shot_site: str = ""
@@ -458,6 +486,49 @@ class Task:
             action.target.tab_id if action.target.tab_id is not None else "-",
             obs.url[:80],
         )
+        # --- CYCLE BREAKER ---
+        # The loop breaker below only catches an action REPEATED without
+        # effect; an action that works is deliberately forgotten. But two
+        # actions that both work can still cancel each other out forever --
+        # "Mark all present", "Clear all", "Mark all present", "Clear all" --
+        # and every single one of them verifies as a success, so nothing ever
+        # trips. The agent looked like it was hallucinating; it was really
+        # stuck in a two-stroke cycle that the guard was blind to by design.
+        # Detect the cycle by shape: A, B, A and now B again.
+        recent = self._executed[-3:]
+        if is_oscillation(self._executed, signature):
+            for entry in (recent[1], recent[2]):
+                for key in (entry.get("nid"), entry.get("eid")):
+                    if key:
+                        self._dead_targets[key] = entry.get("name", "")[:60]
+            note = (
+                "'%s' on %r and '%s' on %r are undoing each other -- each one "
+                "reverses the other and the page keeps returning to where it "
+                "started. Both controls have been taken off the table. Do the "
+                "work on the individual rows/items instead, or say what is "
+                "blocking you with `fail`."
+                % (action.action, (action.target.name or "?")[:40],
+                   recent[2].get("verb", "click"), (recent[2].get("name") or "?")[:40])
+            )
+            await bus.emit("POLICY_DENIED", {
+                "action_id": action.action_id,
+                "action": action.action,
+                "decision": {
+                    "decision": "deny", "risk": "blocked",
+                    "rules_fired": ["oscillating-actions"],
+                    "reason": note,
+                },
+            }, task_id=self.task_id, step=self.step)
+            self.history.append({
+                "step": self.step,
+                "summary": "%s (%s) -> BLOCKED as one half of a back-and-forth cycle"
+                           % (action.action, redact_preview(action)),
+                "verdict": "blocked",
+                "detail": note,
+            })
+            self._executed = []
+            return None, None
+
         self._recent_signatures.append(signature)
         self._recent_signatures = self._recent_signatures[-12:]
         repeats = self._recent_signatures.count(signature)
@@ -850,6 +921,16 @@ class Task:
             self._recent_signatures = [s for s in self._recent_signatures if s != signature]
             self._dead_targets.pop(action.target.nid or "", None)
             self._dead_targets.pop(action.target.element_id or "", None)
+            # Remembered for the cycle breaker, which needs the actions that
+            # worked -- those are the ones that can cancel each other out.
+            self._executed.append({
+                "sig": signature,
+                "verb": action.action,
+                "nid": action.target.nid or "",
+                "eid": action.target.element_id or "",
+                "name": action.target.name or "",
+            })
+            self._executed = self._executed[-8:]
             await bus.emit("ACTION_VERIFIED", {
                 "action_id": action.action_id, "action": action.action,
                 "verdict": verdict.model_dump(),

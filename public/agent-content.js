@@ -16,7 +16,7 @@
 // compares this against the file on disk and says so loudly when Chrome is
 // still running an older copy -- a stale content script looks exactly like a
 // broken agent, and that is a miserable thing to debug.
-const AGENT_BUILD = 'b22-extract-sees-custom-elements'
+const AGENT_BUILD = 'b25-paste-probe-uses-textcontent'
 
 const AGENT_EID = 'agentEid'
 const AGENT_NID = 'agentNid'
@@ -462,6 +462,90 @@ function isVisible(el, rect, style) {
   return true
 }
 
+/*
+ * A form control the eye can see but this code nearly threw away.
+ *
+ * The custom toggle/switch is one of the most common patterns on the web: the
+ * real <input type="checkbox"> is made invisible (opacity:0, or clipped to a
+ * 1px sr-only box) and a styled <span> track and thumb are drawn in its place
+ * inside the same <label>. The control is fully visible to a human and fully
+ * operable by a mouse -- but the element that carries the checked state fails
+ * every test in isVisible(), so it never reached the observation at all.
+ *
+ * That is how an attendance roster of fourteen named toggles showed up to the
+ * agent as two buttons and nothing else. With no per-student control to see,
+ * "mark everyone except Gaurav" had no way to finish: the model clicked "Mark
+ * all present", looked for Gaurav's row, could not find it, clicked "Clear
+ * all" to start over, and went round that loop until a human stopped it. The
+ * flip-flopping was not confusion -- it was the only move left on a page it
+ * was being shown half of.
+ *
+ * So when a control fails the visibility test on its own, look for the visible
+ * thing that stands in for it: its wrapping <label>, its label[for=...], or a
+ * small visible ancestor. If that proxy is visible, the control is visible --
+ * and the proxy's rect is where a real mouse would click it.
+ */
+function visualProxy(el) {
+  const tag = el.tagName.toLowerCase()
+  const role = (el.getAttribute('role') || '').toLowerCase()
+  const proxyable = tag === 'input' || tag === 'select' || tag === 'textarea'
+    || role === 'checkbox' || role === 'radio' || role === 'switch'
+  if (!proxyable) return null
+
+  const candidates = []
+  try {
+    if (el.id) {
+      const forLabel = document.querySelector('label[for="' + CSS.escape(el.id) + '"]')
+      if (forLabel) candidates.push(forLabel)
+    }
+    const wrapping = el.closest ? el.closest('label') : null
+    if (wrapping) candidates.push(wrapping)
+  } catch (e) { /* CSS.escape can throw on exotic ids */ }
+
+  // Fall back to the nearest ancestors, but only small ones: a styled switch
+  // lives a node or two above the input, while a whole <form> or page section
+  // would hand back a rect that clicks the wrong thing entirely.
+  let p = el.parentElement
+  for (let i = 0; i < 3 && p; i++) {
+    candidates.push(p)
+    p = p.parentElement
+  }
+
+  for (const c of candidates) {
+    if (!c || c === document.body || c === document.documentElement) continue
+    let r
+    let st
+    try {
+      r = c.getBoundingClientRect()
+      st = window.getComputedStyle(c)
+    } catch (e) { continue }
+    if (!isVisible(c, r, st)) continue
+    // Big enough to be seen and clicked, small enough to still BE the control.
+    if (r.width > 240 || r.height > 120) continue
+    return { el: c, rect: r }
+  }
+  return null
+}
+
+/*
+ * Where a click on this element should actually land. For an ordinary element
+ * that is its own box; for a visually-hidden control it is the box of the
+ * visible proxy the user would aim at.
+ */
+function interactionRect(el) {
+  let rect
+  let style
+  try {
+    rect = el.getBoundingClientRect()
+    style = window.getComputedStyle(el)
+  } catch (e) {
+    return el.getBoundingClientRect()
+  }
+  if (isVisible(el, rect, style)) return rect
+  const proxy = visualProxy(el)
+  return proxy ? proxy.rect : rect
+}
+
 function isEditable(el) {
   const tag = el.tagName.toLowerCase()
   if (tag === 'textarea') return true
@@ -668,7 +752,13 @@ function walk() {
     } catch (e) {
       continue
     }
-    if (!isVisible(el, rect, style)) continue
+    if (!isVisible(el, rect, style)) {
+      // A styled toggle hides its real input. Measure it by the visible thing
+      // that stands in for it, and keep it: the input is what holds `checked`.
+      const proxy = visualProxy(el)
+      if (!proxy) continue
+      rect = proxy.rect
+    }
     const onScreen = rect.bottom > 0 && rect.right > 0
       && rect.top < window.innerHeight && rect.left < window.innerWidth
     const tag = el.tagName.toLowerCase()
@@ -1031,6 +1121,17 @@ async function scrollIntoView(el) {
   await sleep(70)
 }
 
+// True when both nodes belong to the same <label>: the styled parts of one
+// custom control, not one element covering an unrelated one.
+function sharesLabel(el, other) {
+  try {
+    const lab = el.closest ? el.closest('label') : null
+    return !!(lab && lab.contains(other))
+  } catch (e) {
+    return false
+  }
+}
+
 function centerOf(el) {
   const r = el.getBoundingClientRect()
   return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }
@@ -1070,7 +1171,10 @@ function firePointer(el, type, pt) {
 
 async function doClick(el) {
   await scrollIntoView(el)
-  const pt = centerOf(el)
+  // For a visually-hidden control this is its visible proxy's box, which is
+  // where a real mouse would land; for everything else it is the element.
+  const aim = interactionRect(el)
+  const pt = { x: Math.round(aim.left + aim.width / 2), y: Math.round(aim.top + aim.height / 2) }
 
   // Click what is actually under the pointer, the way a real mouse does.
   //
@@ -1086,6 +1190,11 @@ async function doClick(el) {
     if (top) {
       if (el.contains(top)) {
         target = top          // an inner node: exactly what a mouse would hit
+      } else if (top !== el && !top.contains(el) && sharesLabel(el, top)) {
+        // The styled track/thumb of a custom switch sits over its own input.
+        // That is not an obstruction, it is the part a mouse is meant to hit:
+        // clicking it activates the label, which activates the control.
+        target = top
       } else if (top !== el && !top.contains(el)) {
         // Something unrelated is covering the element. Say so, and click it
         // anyway is NOT the answer -- report it and let the loop decide.
@@ -1190,6 +1299,29 @@ function normalizeForCompare(s) {
  * Either way we read the field back and report what actually landed.
  */
 async function doType(el, text, replace) {
+  // A tab character means this is a TABLE, not a value.
+  //
+  // The agent reached for `type` twice after paste_table reported failure, and
+  // typed a whole tab-separated block into one cell. A field holds one value,
+  // so the rows collapse -- but the readback still matched closely enough to
+  // report success, and the task was announced as done over a spreadsheet
+  // containing one mangled cell. Refusing here is the only place that failure
+  // can be made visible, because by the time it is typed it looks fine.
+  //
+  // Tab is safe to key on: it moves focus, so nobody ever means to type one
+  // into a field. Plain newlines are left alone -- a two-line chat message is
+  // perfectly ordinary.
+  if (String(text).indexOf('\t') !== -1) {
+    return {
+      typed: false,
+      verified: false,
+      strategy: 'refused',
+      error: 'this text is tab-separated, so it is a table, not a value. A field '
+        + 'holds ONE value: typing rows into it collapses them into a single '
+        + 'cell that reads back as though it worked. Use `paste_table` instead.',
+    }
+  }
+
   await scrollIntoView(el)
   try { el.focus({ preventScroll: true }) } catch (e) { /* ignore */ }
   await sleep(35)
@@ -1568,6 +1700,52 @@ function collectRepeatedGroup(params, maxResults, requirePrice) {
   return { items: items, group_size: best.list.length, priced: requirePrice }
 }
 
+/**
+ * A cheap fingerprint of the page, for judging an action whose effect cannot
+ * be read back directly -- anything drawn to a canvas, above all.
+ *
+ * None of these parts is interesting alone. Together they move whenever an
+ * application actually does something: it enables toolbar controls, moves a
+ * selection, updates a status line, redraws a formula bar.
+ */
+function domSignature() {
+  const body = document.body
+  const active = document.activeElement
+  return [
+    document.querySelectorAll('*').length,
+    document.querySelectorAll('[aria-disabled="true"]').length,
+    document.querySelectorAll('[aria-selected="true"]').length,
+    document.querySelectorAll('[role="status"], [role="alert"]').length,
+    body ? (body.innerText || '').length : 0,
+    active ? String(active.value || active.textContent || '').length : 0,
+  ].join('|')
+}
+
+/**
+ * Everything on the page a person could actually read, including the places a
+ * canvas application keeps its current value: the formula bar, a focused
+ * editor, the off-screen layer it maintains for screen readers. innerText
+ * alone misses all of those, which is why a landed paste looked like nothing.
+ */
+function readableText() {
+  const parts = []
+  // textContent, NOT innerText. innerText returns only what is RENDERED, and a
+  // canvas application keeps its text in an off-screen layer for screen
+  // readers -- exactly the place worth looking. Using innerText here is why a
+  // paste whose cells were plainly in the sheet came back undetected.
+  if (document.body) parts.push(document.body.textContent || '')
+  document.querySelectorAll('input, textarea').forEach((el) => {
+    if (el.value) parts.push(String(el.value))
+  })
+  // Editors that hold their value in an attribute rather than a text node.
+  // Their text is already in body.textContent above; this is for the label.
+  document.querySelectorAll('[aria-label]').forEach((el) => {
+    const label = el.getAttribute('aria-label')
+    if (label) parts.push(label)
+  })
+  return parts.join('\n')
+}
+
 function escapeHtmlCell(s) {
   return String(s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -1587,10 +1765,30 @@ function escapeHtmlCell(s) {
  * gets cleaner cell boundaries from it; text/plain TSV is the fallback every
  * grid understands, and is what a plain textarea would receive.
  *
- * Whether it worked is readable without looking at the canvas: a grid that
- * handles a paste calls preventDefault on it, so dispatchEvent returns false.
- * An unhandled paste leaves the event uncancelled, which is the honest signal
- * that this page's grid did not take it.
+ * HOW THIS IS VERIFIED, and how it was verified wrongly at first.
+ *
+ * The first version treated preventDefault as the whole answer: a grid that
+ * takes a paste cancels the event, so `dispatchEvent` returning false meant
+ * success. It is sound evidence when it happens -- and Google Sheets does not
+ * do it. The cells landed correctly on the very first attempt and this
+ * function reported failure, so the agent pasted the same table another five
+ * times. A verification signal that is merely SUFFICIENT must never be used as
+ * though it were NECESSARY.
+ *
+ * The replacement for that was a generic page fingerprint, and it was still
+ * too weak: on Sheets nothing it counted moved, so a landed paste was reported
+ * as a failure a second time. The signal that actually works is the direct
+ * one. A grid that takes cells has to show the active cell's value SOMEWHERE
+ * a person can read it -- the formula bar, the accessibility layer -- and that
+ * somewhere is ordinary DOM. So probe for the pasted header text itself:
+ * absent from the page before, present after, means the cells went in.
+ *
+ * The fingerprint is kept as a weaker third signal for grids that put nothing
+ * readable on screen.
+ *
+ * Candidates are also tried ONE AT A TIME now, each judged before moving on.
+ * Dispatching at all of them up front was how one requested paste could become
+ * three pastes on a page that handles the event at the document level.
  */
 async function doPasteTable(params) {
   const tsv = String(params.text == null ? '' : params.text).replace(/\r\n/g, '\n')
@@ -1616,7 +1814,15 @@ async function doPasteTable(params) {
   if (editor && candidates.indexOf(editor) === -1) candidates.push(editor)
   if (document.body) candidates.push(document.body)
 
-  const tried = []
+  // A distinctive cell to look for afterwards. The longest one in the first
+  // row: a header like "Magnitude" is far less likely to already be somewhere
+  // on the page than a bare number would be.
+  const probe = (rows[0] || [])
+    .map((c) => String(c || '').trim())
+    .filter((c) => c.length >= 4)
+    .sort((a, b) => b.length - a.length)[0] || ''
+
+  const attempts = []
   for (const node of candidates) {
     let dt
     try {
@@ -1624,31 +1830,59 @@ async function doPasteTable(params) {
       dt.setData('text/plain', tsv)
       dt.setData('text/html', html)
     } catch (e) {
-      return { handled: false, error: 'DataTransfer unavailable: ' + e.message }
+      return { dispatched: false, error: 'DataTransfer unavailable: ' + e.message }
     }
+    const where = node.tagName ? node.tagName.toLowerCase() : 'unknown'
+    const beforeSig = domSignature()
+    // Only a probe the page does NOT already contain can prove anything.
+    const probeUsable = probe !== '' && readableText().indexOf(probe) === -1
+
     const ev = new ClipboardEvent('paste', {
       clipboardData: dt, bubbles: true, cancelable: true, composed: true,
     })
     const uncancelled = node.dispatchEvent(ev)
-    const where = node.tagName ? node.tagName.toLowerCase() : 'unknown'
-    tried.push(where)
-    if (!uncancelled) {
-      await sleep(400)
+    // Grids apply a paste asynchronously; asking immediately reads the page as
+    // it was before it had any chance to react.
+    await sleep(700)
+
+    const prevented = !uncancelled
+    const probeFound = probeUsable && readableText().indexOf(probe) !== -1
+    const changed = domSignature() !== beforeSig
+    attempts.push({
+      on: where, default_prevented: prevented,
+      probe_found: probeFound, page_changed: changed,
+    })
+
+    if (prevented || probeFound || changed) {
       return {
-        handled: true,
+        dispatched: true,
+        default_prevented: prevented,
+        probe_found: probeFound,
+        // Always reported, found or not, so the server can look for it too in
+        // the fresh observation it takes next -- an independent check through
+        // the walker rather than through this function's own idea of what is
+        // readable.
+        probe: probe.slice(0, 60),
+        page_changed: changed,
         strategy: 'clipboard-paste',
         dispatched_on: where,
         rows: rows.length,
         columns: rows[0] ? rows[0].length : 0,
+        attempts: attempts,
       }
     }
   }
 
   return {
-    handled: false,
-    error: 'no element on this page handled a paste event',
-    tried: tried,
+    dispatched: attempts.length > 0,
+    default_prevented: false,
+    probe_found: false,
+    probe: probe.slice(0, 60),
+    page_changed: false,
+    error: 'the paste left the page completely unchanged, so nothing took it',
+    attempts: attempts,
     rows: rows.length,
+    columns: rows[0] ? rows[0].length : 0,
   }
 }
 
@@ -1799,7 +2033,8 @@ async function execute(action) {
     }
     case 'paste_table': {
       const r = await doPasteTable(params)
-      return { ok: !!r.handled, result: r, error: r.handled ? undefined : r.error }
+      const landed = !!(r.default_prevented || r.probe_found || r.page_changed)
+      return { ok: landed, result: r, error: landed ? undefined : r.error }
     }
     case 'dismiss_overlay': {
       const r = await doDismissOverlay()
