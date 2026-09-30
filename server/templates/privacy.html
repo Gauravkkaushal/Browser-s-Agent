@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NetraShield Privacy Policy</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #080b13; color: #dce4f2; line-height: 1.65; }
+    main { width: min(860px, calc(100% - 32px)); margin: 48px auto; padding: 40px; border: 1px solid #273044; border-radius: 20px; background: #0e1320; box-shadow: 0 24px 80px rgba(0,0,0,.32); }
+    header { display: flex; align-items: center; gap: 16px; padding-bottom: 24px; border-bottom: 1px solid #273044; }
+    .mark { width: 52px; height: 52px; display: grid; place-items: center; border: 2px solid #08d7eb; border-radius: 18px 18px 24px 24px; color: #35c8ff; font-size: 24px; }
+    h1 { margin: 0; color: #fff; font-size: clamp(26px, 4vw, 38px); line-height: 1.15; }
+    .updated { margin: 5px 0 0; color: #8c98ad; font-size: 14px; }
+    h2 { margin: 34px 0 10px; color: #fff; font-size: 19px; }
+    p, li { color: #b8c2d4; }
+    ul { padding-left: 22px; }
+    strong { color: #e8f7fb; }
+    a { color: #41dced; }
+    .notice { margin: 26px 0; padding: 16px 18px; border-left: 3px solid #08d7eb; border-radius: 8px; background: #101c29; }
+    footer { margin-top: 38px; padding-top: 20px; border-top: 1px solid #273044; color: #8c98ad; font-size: 14px; }
+    @media (max-width: 600px) { main { margin: 0; width: 100%; padding: 26px 20px; border: 0; border-radius: 0; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="mark" aria-hidden="true">◉</div>
+    <div>
+      <h1>NetraShield Privacy Policy</h1>
+      <p class="updated">Effective date: 30 September 2026</p>
+    </div>
+  </header>
+
+  <div class="notice">
+    NetraShield is a privacy-focused browser assistant. It accesses browser content only to perform tasks requested by the user and attempts to detect and mask sensitive information locally before cloud-based reasoning.
+  </div>
+
+  <h2>1. Who operates NetraShield</h2>
+  <p>NetraShield is developed and operated by <strong>Gaurav Kaushal</strong>. Privacy questions and data-deletion requests can be sent to <a href="mailto:gaurav545th@gmail.com">gaurav545th@gmail.com</a>.</p>
+
+  <h2>2. Information NetraShield processes</h2>
+  <p>When you explicitly ask NetraShield to inspect a page or complete a browser task, the extension may process:</p>
+  <ul>
+    <li>Your command and task preferences.</li>
+    <li>The URL, title, visible text, page structure, interactive elements, and navigation state of pages involved in the requested task.</li>
+    <li>Locally redacted screenshots when visual understanding is needed.</li>
+    <li>Task events, action results, confirmations, errors, and security/audit records.</li>
+    <li>A randomly generated installation credential and technical session identifiers used to isolate your browser connection from other users.</li>
+    <li>Settings and limited chat/task history stored locally through Chrome storage.</li>
+  </ul>
+  <p>Depending on the website and task, page content may include personal communications or information you entered into a page. NetraShield is designed to detect and mask common sensitive fields locally, but automated redaction cannot be guaranteed to identify every sensitive value.</p>
+
+  <h2>3. How information is used</h2>
+  <p>Information is used only to provide and secure the browser-assistant functionality requested by the user, including understanding the current page, planning actions, enforcing safety policies, requesting confirmation, executing permitted actions, verifying results, diagnosing failures, and maintaining tamper-evident task records.</p>
+
+  <h2>4. Local processing and cloud reasoning</h2>
+  <p>Sensitive-data detection, screenshot masking, OCR verification, and supported visual grounding run inside the extension using packaged code and models. After this local processing, the minimum page context needed for a task may be transmitted over encrypted HTTPS or WSS connections to the NetraShield backend and a configured AI model provider, such as Google Gemini, Groq, OpenRouter, or OpenAI, for planning and reasoning.</p>
+  <p>NetraShield does not download or execute remote JavaScript or WebAssembly. Cloud responses are structured, non-executable data interpreted by fixed logic packaged with the extension.</p>
+
+  <h2>5. Sharing and sale of data</h2>
+  <p>NetraShield does not sell user data and does not use browser data for personalized advertising, retargeting, credit decisions, or unrelated profiling. Data is transferred to service providers only when necessary to provide the user-requested functionality, maintain security, comply with law, or investigate abuse. Service providers process data under their own applicable terms and privacy policies.</p>
+
+  <h2>6. Storage and retention</h2>
+  <p>Extension preferences, installation credentials, and limited interface history may remain in Chrome storage until you clear the extension's data or uninstall it. The backend may retain task audit records and operational logs for service operation, troubleshooting, security, and compliance. Records are retained until they are deleted as part of operational maintenance or in response to a valid deletion request, unless a longer period is required by law or necessary to protect the service from abuse.</p>
+
+  <h2>7. Security</h2>
+  <p>NetraShield uses HTTPS and WSS for information transmitted over the public internet. Each extension installation uses an independent high-entropy credential so its browser connection, task registry, and event stream are isolated from other installations. No method of storage or transmission is completely secure, and users should avoid asking the extension to process information that is not necessary for their task.</p>
+
+  <h2>8. User choices and deletion</h2>
+  <p>You control when NetraShield is invoked and which tasks it performs. Sensitive actions may require your confirmation. You can stop using the service, clear extension storage, or uninstall the extension at any time. To request deletion of backend task records associated with your installation, email <a href="mailto:gaurav545th@gmail.com">gaurav545th@gmail.com</a> with the subject “NetraShield Data Deletion Request.” Additional verification may be required to prevent unauthorized deletion requests.</p>
+
+  <h2>9. Children's privacy</h2>
+  <p>NetraShield is not directed to children under 13 and is not intended to knowingly collect personal information from children.</p>
+
+  <h2>10. Changes to this policy</h2>
+  <p>This policy may be updated when NetraShield's functionality or data practices change. Material changes will be reflected on this page with an updated effective date and, where required, disclosed in the product interface.</p>
+
+  <h2>11. Chrome Web Store Limited Use</h2>
+  <p>NetraShield's use of information received from Chrome APIs adheres to the Chrome Web Store User Data Policy, including the Limited Use requirements. Chrome API data is used only to provide or improve the extension's single, user-facing purpose and is not transferred for advertising or unrelated purposes.</p>
+
+  <footer>NetraShield · Gaurav Kaushal · <a href="mailto:gaurav545th@gmail.com">gaurav545th@gmail.com</a></footer>
+</main>
+</body>
+</html>
