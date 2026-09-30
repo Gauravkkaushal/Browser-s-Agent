@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
@@ -24,6 +24,7 @@ from .browser_bridge import bridge
 from .events import audit_path, bus, verify_audit_chain
 from .knowledge import known_hosts
 from .loop import registry
+from .runtime import InvalidSessionToken, runtimes
 from contextlib import asynccontextmanager
 
 
@@ -39,6 +40,34 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Browser Agent", version="2.0.0", lifespan=_lifespan)
+
+_PUBLIC_PREFIXES = ("/fixtures/",)
+_PUBLIC_PATHS = {"/", "/cockpit", "/health", "/agent-content.js", "/docs", "/openapi.json"}
+
+
+def _websocket_token(socket: WebSocket) -> str:
+    """Read the bearer credential from a WebSocket protocol, not its URL."""
+    for protocol in socket.headers.get("sec-websocket-protocol", "").split(","):
+        protocol = protocol.strip()
+        if protocol.startswith("auth."):
+            return protocol[5:]
+    return ""
+
+
+@app.middleware("http")
+async def bind_authenticated_runtime(request: Request, call_next):
+    """Every private HTTP request executes inside its owner's runtime."""
+    path = request.url.path
+    if path in _PUBLIC_PATHS or any(path.startswith(p) for p in _PUBLIC_PREFIXES):
+        return await call_next(request)
+    authorization = request.headers.get("authorization", "")
+    token = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
+    try:
+        runtime = runtimes.get(token)
+    except InvalidSessionToken:
+        return JSONResponse({"detail": "authentication required"}, status_code=401)
+    with runtime.activate():
+        return await call_next(request)
 
 app.add_middleware(
     CORSMiddleware,
@@ -76,11 +105,8 @@ async def cockpit():
 async def health():
     return {
         "ok": True,
-        "browser_connected": bridge.connected,
-        "bridge": bridge.status(),
         "model_chain": llm.chain_names(),
-        "active_task": registry.active_task_id,
-        "hint_packs": known_hosts(),
+        "sessions": runtimes.session_count,
         "guards": {
             "max_steps": config.MAX_STEPS,
             "wall_clock_s": config.WALL_CLOCK_S,
@@ -112,6 +138,8 @@ async def get_task(task_id: str):
 
 @app.get("/tasks/{task_id}/audit", response_class=PlainTextResponse)
 async def get_audit(task_id: str):
+    if registry.get(task_id) is None:
+        raise HTTPException(status_code=404, detail="no such task")
     path = audit_path(task_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="no audit file for %s" % task_id)
@@ -120,6 +148,8 @@ async def get_audit(task_id: str):
 
 @app.get("/tasks/{task_id}/audit/verify")
 async def get_audit_verify(task_id: str):
+    if registry.get(task_id) is None:
+        raise HTTPException(status_code=404, detail="no such task")
     """Recompute the audit file's hash chain from scratch and say whether it
     still matches -- tamper-evidence a reader can check, not just a claim."""
     result = verify_audit_chain(task_id)
@@ -130,6 +160,8 @@ async def get_audit_verify(task_id: str):
 
 @app.get("/tasks/{task_id}/compliance-report")
 async def get_compliance_report(task_id: str, format: str = "json"):
+    if registry.get(task_id) is None:
+        raise HTTPException(status_code=404, detail="no such task")
     """A DPDP Act 2023 technical-controls report built from this task's own
     audit trail -- real redaction/verification/policy counts and a freshly
     recomputed hash-chain check, not a static claim. `?format=html` returns a
@@ -144,6 +176,8 @@ async def get_compliance_report(task_id: str, format: str = "json"):
 
 @app.get("/tasks/{task_id}/trace")
 async def get_trace(task_id: str):
+    if registry.get(task_id) is None:
+        raise HTTPException(status_code=404, detail="no such task")
     """The URL-transition trace: the evidence that real navigation happened."""
     path = audit_path(task_id)
     if not path.exists():
@@ -207,6 +241,23 @@ async def fixture_payment():
 @app.get("/fixtures/pii", response_class=HTMLResponse)
 async def fixture_pii():
     return HTMLResponse(_read(FIXTURES, "pii.html"))
+
+
+@app.get("/fixtures/job-application-demo", response_class=HTMLResponse)
+async def fixture_job_application_demo():
+    """Standalone local job demo whose saved-profile button fills PII in-browser."""
+    return HTMLResponse(_read(FIXTURES, "technova_careers.html"))
+
+
+@app.get("/fixtures/prompt-injection-demo", response_class=HTMLResponse)
+async def fixture_prompt_injection_demo():
+    """Product comparison page carrying a real, observable prompt injection.
+
+    The malicious sentence is deliberately present in rendered DOM text so the
+    normal walker sees it and the real sanitizer must neutralize it.  It is a
+    local security fixture, not a simulated detection result.
+    """
+    return HTMLResponse(_read(FIXTURES, "prompt_injection_shop.html"))
 
 
 @app.get("/fixtures/shop", response_class=HTMLResponse)
@@ -339,50 +390,49 @@ async def debug_bridge(body: BridgeCall):
 # ---------------------------------------------------------------------------
 @app.websocket("/ws/agent")
 async def ws_agent(socket: WebSocket):
-    await socket.accept()
+    try:
+        runtime = runtimes.get(_websocket_token(socket))
+    except InvalidSessionToken:
+        await socket.close(code=4401, reason="authentication required")
+        return
+    await socket.accept(subprotocol="netrashield.v1")
     session_id = socket.query_params.get("session_id", "unknown")
     attached = False
-    try:
-        while True:
-            raw = await socket.receive_text()
-            try:
-                msg = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-            mtype = msg.get("type")
+    with runtime.activate():
+        try:
+            while True:
+                raw = await socket.receive_text()
+                try:
+                    msg = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                mtype = msg.get("type")
 
-            # Keepalive: Chrome only holds the service worker open while
-            # messages flow, so answer every ping promptly.
-            if not attached and mtype != "WS_CONNECTED":
-                # An extension old enough not to announce itself still has to
-                # work; it simply reports no build, which is itself the warning.
-                await bridge.attach(socket, session_id, sw_build="")
-                attached = True
-
-            if mtype == "PING":
-                await socket.send_json({"v": 1, "type": "PONG", "payload": {}})
-                continue
-            if mtype == "BRIDGE_RESPONSE":
-                payload = msg.get("payload") or {}
-                bridge.resolve(payload.get("req_id", ""), payload)
-                continue
-            if mtype == "WS_CONNECTED":
-                # The worker announces which build of itself is running. Attach
-                # here so that build is known from the first moment, and a stale
-                # extension is called out before it can quietly misbehave.
-                if not attached:
-                    await bridge.attach(
-                        socket, session_id,
-                        sw_build=str((msg.get("payload") or {}).get("sw_build") or ""),
-                    )
+                if not attached and mtype != "WS_CONNECTED":
+                    await bridge.attach(socket, session_id, sw_build="")
                     attached = True
-                continue
-    except WebSocketDisconnect:
-        pass
-    except Exception:  # noqa: BLE001
-        pass
-    finally:
-        await bridge.detach(socket)
+
+                if mtype == "PING":
+                    await socket.send_json({"v": 1, "type": "PONG", "payload": {}})
+                    continue
+                if mtype == "BRIDGE_RESPONSE":
+                    payload = msg.get("payload") or {}
+                    bridge.resolve(payload.get("req_id", ""), payload)
+                    continue
+                if mtype == "WS_CONNECTED":
+                    if not attached:
+                        await bridge.attach(
+                            socket, session_id,
+                            sw_build=str((msg.get("payload") or {}).get("sw_build") or ""),
+                        )
+                        attached = True
+                    continue
+        except WebSocketDisconnect:
+            pass
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            await bridge.detach(socket)
 
 
 # ---------------------------------------------------------------------------
@@ -390,44 +440,47 @@ async def ws_agent(socket: WebSocket):
 # ---------------------------------------------------------------------------
 @app.websocket("/ws/cockpit")
 async def ws_cockpit(socket: WebSocket):
-    await socket.accept()
-    queue = bus.subscribe()
-
-    await socket.send_json({
-        "v": 1, "type": "HELLO", "ts": "", "task_id": None, "step": 0, "seq": 0,
-        "payload": {
-            "browser_connected": bridge.connected,
-            "model_chain": llm.chain_names(),
-            "replay": [e for e in bus.replay(500) if e.get("task_id") == registry.active_task_id or not e.get("task_id")],
-            "active_task": registry.active_task_id,
-            # Everything a UI needs to redraw itself after being closed: the
-            # thread so far, the pending approval, and the last masked snapshot.
-            "snapshot": (registry.get(None).snapshot()
-                         if registry.get(None) is not None else None),
-        },
-    })
-
-    async def pump() -> None:
-        while True:
-            event = await queue.get()
-            await socket.send_json(event)
-
-    pump_task = asyncio.create_task(pump())
     try:
-        while True:
-            raw = await socket.receive_text()
-            try:
-                msg = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-            await _handle_cockpit_message(msg, socket)
-    except WebSocketDisconnect:
-        pass
-    except Exception:  # noqa: BLE001
-        pass
-    finally:
-        pump_task.cancel()
-        bus.unsubscribe(queue)
+        runtime = runtimes.get(_websocket_token(socket))
+    except InvalidSessionToken:
+        await socket.close(code=4401, reason="authentication required")
+        return
+    await socket.accept(subprotocol="netrashield.v1")
+    with runtime.activate():
+        queue = bus.subscribe()
+        await socket.send_json({
+            "v": 1, "type": "HELLO", "ts": "", "task_id": None, "step": 0, "seq": 0,
+            "payload": {
+                "browser_connected": bridge.connected,
+                "model_chain": llm.chain_names(),
+                "replay": [e for e in bus.replay(500) if e.get("task_id") == registry.active_task_id or not e.get("task_id")],
+                "active_task": registry.active_task_id,
+                "snapshot": (registry.get(None).snapshot()
+                             if registry.get(None) is not None else None),
+            },
+        })
+
+        async def pump() -> None:
+            while True:
+                event = await queue.get()
+                await socket.send_json(event)
+
+        pump_task = asyncio.create_task(pump())
+        try:
+            while True:
+                raw = await socket.receive_text()
+                try:
+                    msg = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                await _handle_cockpit_message(msg, socket)
+        except WebSocketDisconnect:
+            pass
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            pump_task.cancel()
+            bus.unsubscribe(queue)
 
 
 async def _handle_cockpit_message(msg: Dict[str, Any], socket: WebSocket) -> None:

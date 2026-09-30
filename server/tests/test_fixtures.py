@@ -114,3 +114,45 @@ def test_the_quakes_smoke_task_points_at_the_fixture_that_exists():
     from fastapi.testclient import TestClient
     from server.main import app
     assert TestClient(app).get("/fixtures/quakes").status_code == 200
+
+
+def test_standalone_job_application_demo_is_served():
+    """The local demo starts at the job portal; WhatsApp is always the real site."""
+    from fastapi.testclient import TestClient
+    from server.main import app
+
+    client = TestClient(app)
+    jobs = client.get("/fixtures/job-application-demo")
+    assert jobs.status_code == 200
+    assert "Frontend Developer" in jobs.text
+    assert "Use saved browser profile" in jobs.text
+    assert "Application submitted" in jobs.text
+
+    assert client.get("/fixtures/whatsapp-job-demo").status_code == 404
+
+
+def test_demo_profile_is_filled_only_by_page_local_javascript():
+    """The fixture must not need a profile value in an agent action payload."""
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "fixtures" / "technova_careers.html").read_text(encoding="utf-8")
+    assert "const demoProfile=" in html
+    assert "document.querySelector('#'+key).value=value" in html
+    assert "fetch(" not in html
+
+
+def test_prompt_injection_demo_is_real_and_detectable():
+    """The live demo must contain a sentence handled by the shipped sanitizer."""
+    from fastapi.testclient import TestClient
+    from server.main import app
+    from server.sanitizer import neutralize_instructions
+
+    response = TestClient(app).get("/fixtures/prompt-injection-demo")
+    assert response.status_code == 200
+    assert "NovaBook Air 14" in response.text
+    assert "Ignore all previous instructions" in response.text
+
+    safe, findings = neutralize_instructions(response.text)
+    assert findings
+    assert any(item["kind"] == "override" for item in findings)
+    assert "ignore all previous instructions" not in safe.lower()

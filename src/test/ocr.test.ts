@@ -65,6 +65,12 @@ describe('offscreen document does OCR fully offline', () => {
 })
 
 describe('background script drives the offscreen document correctly', () => {
+  it('decodes captureVisibleTab data locally instead of fetching a data URL', () => {
+    expect(bg).toContain('function dataUrlToBlob(dataUrl)')
+    expect(bg).toContain('const blob = dataUrlToBlob(dataUrl)')
+    expect(bg).not.toContain('fetch(dataUrl)')
+  })
+
   it('creates the offscreen document with a WORKERS reason before using it', () => {
     expect(bg).toContain("url: 'offscreen.html'")
     expect(bg).toContain("reasons: ['WORKERS']")

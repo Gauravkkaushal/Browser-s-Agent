@@ -78,7 +78,7 @@ export function ChatShell({
   // Interim results appear in the composer live; on final the transcript
   // is appended to whatever the user had already typed.
   const stt = useSpeechToText({
-    onInterim: (_text) => {
+    onInterim: () => {
       // Interim is shown via stt.interimText — no state change needed here.
     },
     onFinal: (text) => {
@@ -230,7 +230,7 @@ export function ChatShell({
       {activePanel === 'chat' && messages.length === 0 && !isRunning && (
         <section className="hero-copy" aria-label="Greeting">
           <Typography.Title level={1}>
-            <span>Hello, Gaurav.</span>
+            <span>Hello, Buddy.</span>
             What should we handle on this page?
           </Typography.Title>
           <Typography.Paragraph>

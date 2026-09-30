@@ -12,6 +12,7 @@ driving: grep it for a domain name and you will find none.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import re
 import time
 import uuid
@@ -220,7 +221,14 @@ class Task:
             raise TaskCancelled()
 
     # -- observation --------------------------------------------------------
-    async def observe(self, screenshot: bool = False) -> Observation:
+    async def observe(self, screenshot: bool = True) -> Observation:
+        """Read the page and capture the same view, redacted on-device.
+
+        The screenshot is part of the observation contract, not occasional
+        telemetry: the cockpit needs to show what the agent saw and the
+        reasoner should act from that visual evidence.  Callers may explicitly
+        opt out only for a narrowly-scoped probe.
+        """
         self._guard()
         try:
             # Only meaningful (and only sent) alongside a screenshot -- it is
@@ -263,6 +271,7 @@ class Task:
             "sensitive_boxes": len(obs.sensitive_boxes),
             "tabs": [t.model_dump() for t in obs.tabs],
             "screenshot": obs.screenshot,
+            "screenshot_error": obs.screenshot_error,
             "observed_at": obs.observed_at,
             "user_tab_note": obs.user_tab_note,
             "qr_detected": obs.qr_detected,
@@ -881,18 +890,12 @@ class Task:
         await self.set_state("VERIFYING")
         # Note: asyncio.sleep(0.15) was removed here. The freshness checker
         # already validates timestamps; this pause added latency with no benefit.
-        # Capture whenever the agent lands somewhere new, as well as on the
-        # regular cadence. Arriving at a new site is exactly the moment the
-        # operator wants to see what was blacked out before anything left the
-        # machine -- a proof card that only appears every fifth step is not
-        # much of a proof.
-        want_shot = (
-            (config.SCREENSHOT_EVERY > 0 and self.step % config.SCREENSHOT_EVERY == 0)
-            or _site_of(obs.url) != self._last_shot_site
-        )
-        after = await self.observe(screenshot=want_shot)
-        if want_shot:
-            self._last_shot_site = _site_of(after.url)
+        # Every decision gets a fresh, locally-redacted visual observation.
+        # This keeps the cockpit honest and lets the reasoner work from the
+        # exact pixels the operator can inspect, instead of silently falling
+        # back to DOM-only reasoning between periodic captures.
+        after = await self.observe(screenshot=True)
+        self._last_shot_site = _site_of(after.url)
 
         after = await self._wait_for_settle(after, state_label="VERIFYING")
 
@@ -1559,4 +1562,26 @@ class Registry:
         return [t.snapshot() for t in self.tasks.values()]
 
 
-registry = Registry()
+_default_registry = Registry()
+_current_registry: contextvars.ContextVar[Registry] = contextvars.ContextVar(
+    "browser_agent_registry", default=_default_registry
+)
+
+
+def set_current_registry(value: Registry):
+    return _current_registry.set(value)
+
+
+def reset_current_registry(token) -> None:
+    _current_registry.reset(token)
+
+
+class _RegistryProxy:
+    def __getattr__(self, name: str):
+        return getattr(_current_registry.get(), name)
+
+    def __setattr__(self, name: str, value) -> None:
+        setattr(_current_registry.get(), name, value)
+
+
+registry = _RegistryProxy()

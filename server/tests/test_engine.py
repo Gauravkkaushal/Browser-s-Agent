@@ -391,6 +391,34 @@ class TestReplan:
         from server import config
         assert 1 <= config.MAX_REPLANS <= 5
 
+    def test_real_whatsapp_delegation_is_generic_and_contact_bound(self):
+        from server import planner, reasoner
+        assert "https://web.whatsapp.com/" in planner.SYSTEM
+        assert "do what X asked" in planner.SYSTEM
+        assert "do not substitute" in planner.SYSTEM.lower()
+        assert "sample\n  contact" in planner.SYSTEM.lower()
+        assert "visible header" in reasoner.SYSTEM
+        assert "wrong person's request" in reasoner.SYSTEM
+
+    def test_unknown_company_domains_must_be_searched_not_invented(self):
+        from server import planner, reasoner
+        assert "Never invent a company's domain" in planner.SYSTEM
+        assert "Never guess a website address" in reasoner.SYSTEM
+
+    def test_redaction_markers_are_not_treated_as_missing_form_fields(self):
+        from server import reasoner
+        prompt = reasoner.SYSTEM
+        assert "PRIVACY PLACEHOLDERS ARE NOT MISSING CONTROLS" in prompt
+        assert "Never call `fail` merely because" in prompt
+        assert "redacted non-empty value" in prompt
+        assert '"Use saved browser profile"' in prompt
+
+        observation = obs(page_text="Name: [REDACTED:NAME_01]")
+        observation.pii_redactions = {"NAME": 1}
+        digest = reasoner._observation_digest(observation)
+        assert digest["privacy_status"]["redaction_is_working"] is True
+        assert "remain usable" in digest["privacy_status"]["meaning"]
+
 
 # ---------------------------------------------------------------------------
 # Typing: the field's own readback outranks anything the model predicted
