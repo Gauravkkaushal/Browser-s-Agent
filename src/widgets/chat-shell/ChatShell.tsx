@@ -154,7 +154,7 @@ export function ChatShell({
       <section className="assistant-header" aria-label="Assistant status">
         <div className="brand-lockup">
           <div className="brand-orb" aria-hidden="true">
-            N
+            <img src="./icons/icon-128.png" alt="" />
           </div>
           <div>
             <Typography.Text className="brand-title">
