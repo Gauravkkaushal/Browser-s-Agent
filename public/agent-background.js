@@ -38,6 +38,17 @@ let reconnectTimer = null
 let sessionId = null
 let connected = false
 
+async function getAuthToken() {
+  const stored = await chrome.storage.local.get('agentAuthToken')
+  if (stored.agentAuthToken) return stored.agentAuthToken
+  const bytes = new Uint8Array(32)
+  crypto.getRandomValues(bytes)
+  const token = btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  await chrome.storage.local.set({ agentAuthToken: token })
+  return token
+}
+
 /** Tab the agent is currently driving, and tabs the agent itself opened. */
 let currentTabId = null
 // Ordered newest-first: after a service-worker restart the agent must resume in
@@ -135,11 +146,13 @@ function send(type, payload, extra) {
 async function connect() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return
   const sid = await getSessionId()
+  const authToken = await getAuthToken()
   const base = await getServerUrl()
-  const url = base + '?session_id=' + encodeURIComponent(sid)
+  const separator = base.includes('?') ? '&' : '?'
+  const url = base + separator + 'session_id=' + encodeURIComponent(sid)
 
   try {
-    ws = new WebSocket(url)
+    ws = new WebSocket(url, ['netrashield.v1', 'auth.' + authToken])
   } catch (e) {
     scheduleReconnect()
     return
@@ -531,6 +544,24 @@ function detectQrBoxes(ctx, width, height) {
 // Screenshots: capture -> mask sensitive boxes -> jpeg base64.
 // The canvas is used ONLY to black out regions; nothing is ever drawn.
 // ---------------------------------------------------------------------------
+function dataUrlToBlob(dataUrl) {
+  // MV3 service workers can reject fetch(data:) with "Failed to fetch" even
+  // though captureVisibleTab returned a valid image. Decode it locally; this
+  // also makes it explicit that raw screenshot pixels never hit the network.
+  const comma = dataUrl.indexOf(',')
+  if (comma < 0) throw new Error('capture returned an invalid data URL')
+  const header = dataUrl.slice(0, comma)
+  const match = /^data:([^;,]+)(?:;[^,]*)?$/i.exec(header)
+  const mime = match ? match[1] : 'image/jpeg'
+  const encoded = dataUrl.slice(comma + 1)
+  const binary = /;base64/i.test(header)
+    ? atob(encoded)
+    : decodeURIComponent(encoded)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return new Blob([bytes], { type: mime })
+}
+
 async function captureRedacted(tabId, sensitiveBoxes, viewport) {
   const tab = await chrome.tabs.get(tabId)
   let dataUrl
@@ -540,7 +571,7 @@ async function captureRedacted(tabId, sensitiveBoxes, viewport) {
     return { ok: false, error: 'captureVisibleTab failed: ' + e.message }
   }
   try {
-    const blob = await (await fetch(dataUrl)).blob()
+    const blob = dataUrlToBlob(dataUrl)
     const bmp = await createImageBitmap(blob)
     const canvas = new OffscreenCanvas(bmp.width, bmp.height)
     const ctx = canvas.getContext('2d')
@@ -1195,18 +1226,18 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || !message.type) return false
   if (message.type === 'AGENT_STATUS') {
-    getSessionId().then((sid) => {
+    Promise.all([getSessionId(), getAuthToken()]).then(([sid, authToken]) => {
       // Also say WHICH page the agent would work on right now. The popup shows
       // this before you type, because "there is no page to read" is something
       // you need to know while writing the command -- not thirty seconds later
       // when a plan has already been made and thrown away.
       peekTargetTab().then((tab) => sendResponse({
-        connected: connected, session_id: sid,
+        connected: connected, session_id: sid, auth_token: authToken,
         current_tab: currentTabId, sw_build: AGENT_SW_BUILD,
         target_url: tab ? (tab.url || '') : '',
         target_title: tab ? (tab.title || '') : '',
       })).catch(() => sendResponse({
-        connected: connected, session_id: sid,
+        connected: connected, session_id: sid, auth_token: authToken,
         current_tab: currentTabId, sw_build: AGENT_SW_BUILD,
         target_url: '', target_title: '',
       }))

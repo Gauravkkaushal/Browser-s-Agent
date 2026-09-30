@@ -565,11 +565,18 @@
     rows.forEach(function (r) { h += '<dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd>'; });
     document.getElementById('obs').innerHTML = h + '</dl>';
     if (p.screenshot) showShot(p.screenshot);
+    else if (p.screenshot_error) showShotError(p.screenshot_error);
   }
 
   function showShot(b64) {
     document.getElementById('shot').innerHTML =
       '<img alt="screenshot with sensitive regions blacked out" src="data:image/jpeg;base64,' + b64 + '">';
+  }
+
+  function showShotError(message) {
+    document.getElementById('shot').innerHTML =
+      '<div class="empty" style="color:#f85149">Redacted screenshot unavailable: '
+      + esc(message) + '</div>';
   }
 
   var decEl = document.getElementById('dec'), decFirst = true;
@@ -695,6 +702,11 @@
           m.payload.browser_connected ? 'on' : 'off');
         set('p-model', 'models: ' + (m.payload.model_chain || []).join(' > '));
         (m.payload.replay || []).forEach(handle);
+        // A screenshot event may have fallen outside the bounded replay window
+        // while the cockpit was closed. The active task snapshot is the
+        // authoritative fallback, so reconnecting never leaves this card blank.
+        var snap = m.payload.snapshot || {};
+        if (snap.last_screenshot) showShot(snap.last_screenshot);
         return;
       }
       handle(m);

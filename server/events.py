@@ -8,6 +8,7 @@ trustworthy: there is no other way for text to reach the screen.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import json
 import threading
@@ -207,4 +208,29 @@ def verify_audit_chain(task_id: str) -> Dict[str, Any]:
     return {"ok": True, "lines": lines_checked, "head_hash": prev}
 
 
-bus = EventBus()
+_default_bus = EventBus()
+_current_bus: contextvars.ContextVar[EventBus] = contextvars.ContextVar(
+    "browser_agent_event_bus", default=_default_bus
+)
+
+
+def set_current_bus(value: EventBus):
+    """Bind event delivery to one authenticated browser session."""
+    return _current_bus.set(value)
+
+
+def reset_current_bus(token) -> None:
+    _current_bus.reset(token)
+
+
+class _EventBusProxy:
+    """Keep legacy imports working while isolating concurrent sessions."""
+
+    def __getattr__(self, name: str):
+        return getattr(_current_bus.get(), name)
+
+    def __setattr__(self, name: str, value) -> None:
+        setattr(_current_bus.get(), name, value)
+
+
+bus = _EventBusProxy()

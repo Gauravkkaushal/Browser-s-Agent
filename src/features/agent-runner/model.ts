@@ -198,6 +198,7 @@ export function useAgentRunner() {
   const [isRunning, setIsRunning] = useState(false)
   const [connected, setConnected] = useState(false)
   const [browserLinked, setBrowserLinked] = useState(false)
+  const [authToken, setAuthToken] = useState('')
   const [pending, setPending] = useState<PendingConfirmation | null>(null)
   const [preApprove, setPreApproveState] = useState(false)
   // Which page the agent would act on. Empty means there is none.
@@ -235,6 +236,7 @@ export function useAgentRunner() {
         chrome.runtime?.sendMessage({ type: 'AGENT_STATUS' }, (reply: any) => {
           if (!alive || chrome.runtime?.lastError || !reply) return
           setTargetPage(reply.target_url || '')
+          if (reply.auth_token) setAuthToken(reply.auth_token)
         })
         chrome.storage?.local?.get('local_model_status', (data) => {
           if (!alive || chrome.runtime?.lastError) return
@@ -444,6 +446,7 @@ export function useAgentRunner() {
 
   // -- transport ------------------------------------------------------------
   useEffect(() => {
+    if (!authToken) return
     let closed = false
     let retry: ReturnType<typeof setTimeout> | null = null
 
@@ -451,7 +454,7 @@ export function useAgentRunner() {
       if (closed) return
       let ws: WebSocket
       try {
-        ws = new WebSocket(SERVER_WS)
+        ws = new WebSocket(SERVER_WS, ['netrashield.v1', `auth.${authToken}`])
       } catch {
         retry = setTimeout(connect, RECONNECT_MS)
         return
@@ -521,7 +524,7 @@ export function useAgentRunner() {
       if (retry) clearTimeout(retry)
       socketRef.current?.close()
     }
-  }, [handle])
+  }, [authToken, handle])
 
   const send = useCallback((type: string, payload: Record<string, unknown>) => {
     const ws = socketRef.current

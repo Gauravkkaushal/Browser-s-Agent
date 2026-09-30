@@ -1,5 +1,35 @@
 # Browser Agent — a real computer-use agent for your own Chrome
 
+## Real WhatsApp workflow and standalone job demo
+
+The indirect-instruction workflow uses the real `https://web.whatsapp.com/`.
+NetraShield extracts the contact named in the user's command, searches for that
+contact, verifies the conversation header, reads the latest actionable request,
+and replans the remaining work. It is not tied to Rahul: any unambiguously named
+contact can be used.
+
+1. Start the server with `npm run server` and load the built extension from
+   `dist/`.
+2. Sign in to WhatsApp Web in the same Chrome profile.
+3. Ask NetraShield: `Check my WhatsApp and do whatever Rahul asked me to do.`
+4. Watch it open Rahul's chat, read the request locally, call `replan`, and
+   continue onto the requested website. Replace Rahul with any contact name.
+
+For a deterministic job-application-only demonstration, open
+`http://127.0.0.1:8787/fixtures/job-application-demo` and ask NetraShield to
+apply for the Frontend Developer role using the saved browser profile.
+
+In the privacy proof panel, verify that the name, email, and phone appear
+only as typed redaction markers in the exact model-input sample. The final
+**Submit Application** action remains subject to the normal human-confirmation
+policy unless the task was explicitly pre-approved.
+
+The job demo's saved-profile button is intentionally implemented in page-local JavaScript:
+the agent asks the browser to use the saved profile but never places name,
+email, phone, or any secret in a model-generated action payload. The fixture
+is clearly marked as a local demonstration and does not impersonate a real
+employer. There is no simulated WhatsApp page.
+
 A closed-loop agent that drives **your** Chrome profile: it observes the live
 page, reasons about it with an LLM, validates every proposed action through a
 deterministic policy layer, executes it against the real DOM, and then verifies

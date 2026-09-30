@@ -127,7 +127,10 @@ const STRICTER_PATTERNS = [
   // reads the same name to tell a search box from a composer -- saw a field
   // named "...or start new chat" with the word "Search" gone and refused to
   // let a contact's name be typed into contact search.
-  { type: 'NAME', regex: /\b[A-Z][a-z]{2,}(?:[ -][A-Z][a-z]{1,}){1,3}\b/g, from: 'strict' },
+  // Full names are personal data in every privacy-preserving mode. The UI
+  // vocabulary guard below prevents labels such as "Apply Now" and "Search
+  // Jobs" from being mistaken for people, so this can safely run at balanced.
+  { type: 'NAME', regex: /\b[A-Z][a-z]{2,}(?:[ -][A-Z][a-z]{1,}){1,3}\b/g, from: 'balanced' },
 ]
 
 // The furniture of an interface, not a person. Hiding these costs the agent

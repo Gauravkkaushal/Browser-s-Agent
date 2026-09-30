@@ -11,6 +11,7 @@ back mid-task is invisible to the loop apart from the pause.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import uuid
 from typing import Any, Dict, Optional
 
@@ -232,4 +233,26 @@ class BrowserBridge:
             return None
 
 
-bridge = BrowserBridge()
+_default_bridge = BrowserBridge()
+_current_bridge: contextvars.ContextVar[BrowserBridge] = contextvars.ContextVar(
+    "browser_agent_bridge", default=_default_bridge
+)
+
+
+def set_current_bridge(value: BrowserBridge):
+    return _current_bridge.set(value)
+
+
+def reset_current_bridge(token) -> None:
+    _current_bridge.reset(token)
+
+
+class _BrowserBridgeProxy:
+    def __getattr__(self, name: str):
+        return getattr(_current_bridge.get(), name)
+
+    def __setattr__(self, name: str, value) -> None:
+        setattr(_current_bridge.get(), name, value)
+
+
+bridge = _BrowserBridgeProxy()

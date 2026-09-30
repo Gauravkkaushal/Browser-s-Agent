@@ -331,8 +331,8 @@ describe('the walker ranks before it caps', () => {
 })
 
 /**
- * The name detector used to be /\b[A-Z][a-z]{2,}\b/ running at `balanced`, the
- * default. That is not a name detector -- it matches the first word of almost
+ * The name detector used to be /\b[A-Z][a-z]{2,}\b/. That is not a name
+ * detector -- it matches the first word of almost
  * any interface label -- so every accessible name reached the reasoner with its
  * most identifying word replaced by a surrogate. The agent could not find a
  * search box called "Search", a send button called "Send", or a composer called
@@ -355,8 +355,8 @@ describe('the NAME detector hides people, not the interface', () => {
     return m ? m[1] : ''
   }
 
-  it('is a strict-tier pattern, as the module comment has always claimed', () => {
-    expect(nameTier()).toBe('strict')
+  it('runs at balanced so full names are protected in the default demo mode', () => {
+    expect(nameTier()).toBe('balanced')
   })
 
   const LABELS = [
