@@ -221,15 +221,16 @@ class Task:
             raise TaskCancelled()
 
     # -- observation --------------------------------------------------------
-    async def observe(self, screenshot: bool = True) -> Observation:
-        """Read the page and capture the same view, redacted on-device.
+    async def observe(self, screenshot: Optional[bool] = None) -> Observation:
+        """Read the page; periodically add an on-device-redacted screenshot.
 
-        The screenshot is part of the observation contract, not occasional
-        telemetry: the cockpit needs to show what the agent saw and the
-        reasoner should act from that visual evidence.  Callers may explicitly
-        opt out only for a narrowly-scoped probe.
+        DOM observation and verification still happen on every step. The much
+        heavier capture + OCR + CLIP path runs on the configured cadence unless
+        a caller explicitly requires or suppresses it.
         """
         self._guard()
+        if screenshot is None:
+            screenshot = self.step == 0 or self.step % config.SCREENSHOT_EVERY == 0
         try:
             # Only meaningful (and only sent) alongside a screenshot -- it is
             # what the on-device CLIP pass scores candidate elements against.
@@ -890,11 +891,9 @@ class Task:
         await self.set_state("VERIFYING")
         # Note: asyncio.sleep(0.15) was removed here. The freshness checker
         # already validates timestamps; this pause added latency with no benefit.
-        # Every decision gets a fresh, locally-redacted visual observation.
-        # This keeps the cockpit honest and lets the reasoner work from the
-        # exact pixels the operator can inspect, instead of silently falling
-        # back to DOM-only reasoning between periodic captures.
-        after = await self.observe(screenshot=True)
+        # DOM verification is always fresh; the expensive visual pipeline runs
+        # at SCREENSHOT_EVERY so ordinary click/type loops stay responsive.
+        after = await self.observe()
         self._last_shot_site = _site_of(after.url)
 
         after = await self._wait_for_settle(after, state_label="VERIFYING")

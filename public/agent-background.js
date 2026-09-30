@@ -25,7 +25,7 @@ import './jsqr/jsQR.js'
 // (which lives HERE) was unverifiable from the outside.
 const AGENT_SW_BUILD = 'sw-b6-paste-table-page-verb'
 
-const DEFAULT_SERVER = 'ws://127.0.0.1:8787/ws/agent'
+const DEFAULT_SERVER = 'wss://browser-s-agent.onrender.com/ws/agent'
 const KEEPALIVE_MS = 20000
 const BACKOFF_MIN_MS = 1500
 const BACKOFF_MAX_MS = 3000

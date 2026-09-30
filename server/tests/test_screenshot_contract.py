@@ -4,11 +4,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_operational_observations_capture_redacted_screenshots_by_default():
+def test_operational_observations_use_configured_visual_cadence():
     source = (ROOT / "server" / "loop.py").read_text(encoding="utf-8")
 
-    assert "async def observe(self, screenshot: bool = True)" in source
-    assert "after = await self.observe(screenshot=True)" in source
+    assert "async def observe(self, screenshot: Optional[bool] = None)" in source
+    assert "self.step % config.SCREENSHOT_EVERY == 0" in source
+    assert "after = await self.observe()" in source
 
 
 def test_cockpit_receives_capture_errors_instead_of_staying_silently_blank():
