@@ -42,7 +42,7 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(title="Browser Agent", version="2.0.0", lifespan=_lifespan)
 
 _PUBLIC_PREFIXES = ("/fixtures/",)
-_PUBLIC_PATHS = {"/", "/cockpit", "/health", "/agent-content.js", "/docs", "/openapi.json"}
+_PUBLIC_PATHS = {"/", "/cockpit", "/privacy", "/health", "/agent-content.js", "/docs", "/openapi.json"}
 
 
 def _websocket_token(socket: WebSocket) -> str:
@@ -99,6 +99,11 @@ async def root():
 @app.get("/cockpit", response_class=HTMLResponse)
 async def cockpit():
     return HTMLResponse(_read(TEMPLATES, "cockpit.html"))
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy_policy():
+    return HTMLResponse(_read(TEMPLATES, "privacy.html"))
 
 
 @app.get("/health")
