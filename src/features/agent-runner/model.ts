@@ -83,8 +83,8 @@ function isDetachedNow(): boolean {
   return typeof location !== 'undefined' && location.hash.startsWith('#detached')
 }
 
-const SERVER_HTTP = 'http://127.0.0.1:8787'
-const SERVER_WS = 'ws://127.0.0.1:8787/ws/cockpit'
+const SERVER_HTTP = 'https://browser-s-agent.onrender.com'
+const SERVER_WS = 'wss://browser-s-agent.onrender.com/ws/cockpit'
 const RECONNECT_MS = 1500
 
 /** Events worth showing a human. The rest is plumbing. */

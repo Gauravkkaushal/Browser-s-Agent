@@ -81,7 +81,7 @@ WALL_CLOCK_S = float(os.getenv("WALL_CLOCK_S", "600"))
 CONFIRM_TIMEOUT_S = float(os.getenv("CONFIRM_TIMEOUT_S", "900"))
 LOGIN_TIMEOUT_S = float(os.getenv("LOGIN_TIMEOUT_S", "300"))
 LOGIN_POLL_S = float(os.getenv("LOGIN_POLL_S", "3"))
-SCREENSHOT_EVERY = int(os.getenv("SCREENSHOT_EVERY", "5"))
+SCREENSHOT_EVERY = max(1, int(os.getenv("SCREENSHOT_EVERY", "10")))
 # A real, measured number, not an aspirational one: the full-tier (tier 0)
 # reasoner payload -- objective, plan, history, the whole elements digest --
 # typically runs several KB to a few tens of KB on an ordinary page. Anything
