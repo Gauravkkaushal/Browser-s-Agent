@@ -1,0 +1,54 @@
+{
+  "timestamp": "2026-10-29T16:08:00+05:30",
+  "commit": "fcaedad",
+  "branch": "chore/world-class-architecture",
+  "test_suites": {
+    "vitest": {
+      "status": "PASS",
+      "files": 8,
+      "passed": 138,
+      "failed": 0,
+      "duration_seconds": 3.59
+    },
+    "pytest": {
+      "status": "PASS",
+      "files": 9,
+      "passed": 194,
+      "failed": 0,
+      "warnings": 1,
+      "duration_seconds": 6.07
+    },
+    "smoke": {
+      "status": "FAIL",
+      "error": "KeyError: 'browser_connected' at server/eval/run_smoke.py:266"
+    },
+    "gates": {
+      "status": "FAIL",
+      "passed": 10,
+      "failed": 2,
+      "total": 12,
+      "failures": ["G1 no placeholder vocabulary", "G2 no site names in engine"]
+    },
+    "lint": {
+      "status": "FAIL",
+      "errors": 16,
+      "warnings": 6,
+      "total_problems": 22
+    }
+  },
+  "bundle_sizes_bytes": {
+    "dist/index.html": 490,
+    "dist/assets/index.js": 34099,
+    "dist/assets/index.css": 20684,
+    "dist/assets/antd.js": 689367,
+    "public_unbundled_assets_total": 76524262,
+    "git_tracked_zip_binary": 45921515
+  },
+  "runtime_budgets": {
+    "max_steps": 60,
+    "wall_clock_timeout_seconds": 600.0,
+    "confirm_timeout_seconds": 900.0,
+    "login_timeout_seconds": 300.0,
+    "screenshot_frequency_steps": 10
+  }
+}

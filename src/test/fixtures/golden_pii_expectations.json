@@ -1,0 +1,73 @@
+{
+  "description": "Ground-truth labeled entities for golden_pii_page.html",
+  "entities": [
+    {
+      "id": "aadhaar-val",
+      "expected_type": "AADHAAR",
+      "raw_value": "9876 5432 1096",
+      "verhoeff_valid": true
+    },
+    {
+      "id": "pan-val",
+      "expected_type": "PAN",
+      "raw_value": "ABCDE1234F"
+    },
+    {
+      "id": "card-val",
+      "expected_type": "CARD",
+      "raw_value": "4111 1111 1111 1111",
+      "luhn_valid": true
+    },
+    {
+      "id": "upi-val",
+      "expected_type": "UPI",
+      "raw_value": "rahul.sharma@okhdfcbank"
+    },
+    {
+      "id": "email-val",
+      "expected_type": "EMAIL",
+      "raw_value": "priya.nair@example.com"
+    },
+    {
+      "id": "phone-val",
+      "expected_type": "PHONE",
+      "raw_value": "+91 9876543210"
+    },
+    {
+      "id": "voter-val",
+      "expected_type": "VOTER_ID",
+      "raw_value": "XYZ1234567"
+    },
+    {
+      "id": "dl-val",
+      "expected_type": "DRIVING_LICENSE",
+      "raw_value": "DL1420110012345"
+    },
+    {
+      "id": "gstin-val",
+      "expected_type": "GSTIN",
+      "raw_value": "27ABCDE1234F1Z5"
+    },
+    {
+      "id": "dob-val",
+      "expected_type": "DOB",
+      "raw_value": "DOB: 15/08/1995"
+    },
+    {
+      "id": "pwd",
+      "expected_protected": true,
+      "input_type": "password"
+    },
+    {
+      "id": "pin",
+      "expected_protected": true,
+      "input_name": "upi_pin"
+    }
+  ],
+  "preserved_non_pii": [
+    "Wireless Noise Canceling Headphones",
+    "Rs 1,499.00",
+    "$19.99",
+    "Confirm & Pay"
+  ]
+}

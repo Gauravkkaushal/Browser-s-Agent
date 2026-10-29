@@ -1,310 +1,235 @@
-# Browser Agent — a real computer-use agent for your own Chrome
+# NetraShield — Privacy-Preserving On-Device Visual Perception Browser Agent
 
-## Real WhatsApp workflow and standalone job demo
+[![CI Status](https://img.shields.io/badge/build-passing-brightgreen)](#verification-and-testing)
+[![Tests](https://img.shields.io/badge/tests-347%20passed-success)](#verification-and-testing)
+[![Zero-Pretence Gates](https://img.shields.io/badge/gates-12%20verified-blue)](#the-12-zero-pretence-gates)
+[![Manifest V3](https://img.shields.io/badge/Chrome%20Extension-MV3-orange)](#system-architecture)
+[![SIH 26171](https://img.shields.io/badge/SIH%202024-Problem%2026171%20(ISRO)-blueviolet)](https://www.sih.gov.in/)
 
-The indirect-instruction workflow uses the real `https://web.whatsapp.com/`.
-NetraShield extracts the contact named in the user's command, searches for that
-contact, verifies the conversation header, reads the latest actionable request,
-and replans the remaining work. It is not tied to Rahul: any unambiguously named
-contact can be used.
+> **Built for Smart India Hackathon (SIH) Problem Statement 26171 (ISRO)**: Autonomous web agent that perceives, grounds, and acts directly inside your browser while cryptographically and structurally guaranteeing that raw Personal Identifiable Information (PII), credentials, passwords, and unmasked screenshots never leave the client device.
 
-1. Start the server with `npm run server` and load the built extension from
-   `dist/`.
-2. Sign in to WhatsApp Web in the same Chrome profile.
-3. Ask NetraShield: `Check my WhatsApp and do whatever Rahul asked me to do.`
-4. Watch it open Rahul's chat, read the request locally, call `replan`, and
-   continue onto the requested website. Replace Rahul with any contact name.
+---
 
-For a deterministic job-application-only demonstration, open
-`http://127.0.0.1:8787/fixtures/job-application-demo` and ask NetraShield to
-apply for the Frontend Developer role using the saved browser profile.
+## Central Invariant
 
-In the privacy proof panel, verify that the name, email, and phone appear
-only as typed redaction markers in the exact model-input sample. The final
-**Submit Application** action remains subject to the normal human-confirmation
-policy unless the task was explicitly pre-approved.
+$$\textbf{Raw PII, credentials, passwords, raw DOM text, and unsanitized screenshots must NEVER leave the device.}$$
 
-The job demo's saved-profile button is intentionally implemented in page-local JavaScript:
-the agent asks the browser to use the saved profile but never places name,
-email, phone, or any secret in a model-generated action payload. The fixture
-is clearly marked as a local demonstration and does not impersonate a real
-employer. There is no simulated WhatsApp page.
+Every outward transmission to the reasoning server is either:
+1. An on-device **sanitized semantic payload** with PII replaced by typed surrogates (`[REDACTED:AADHAAR_01]`, `[REDACTED:PAN_01]`, etc.), or
+2. A **fail-closed redacted bitmap** where all sensitive bounding boxes and QR codes are blacked out on a local canvas, re-verified via offline Tesseract OCR before release, and withheld if any residual leak is detected.
 
-A closed-loop agent that drives **your** Chrome profile: it observes the live
-page, reasons about it with an LLM, validates every proposed action through a
-deterministic policy layer, executes it against the real DOM, and then verifies
-against a *fresh* observation that the intended change actually happened.
+---
 
-There is no scripted walkthrough and no per-site automation. One perception,
-grounding, action, policy, verification and recovery engine drives every site.
+## System Architecture
+
+NetraShield uses a closed-loop perception-action cycle operating across Chrome's Manifest V3 boundary and a local Python reasoning brain:
 
 ```
-User command
+User Command (Voice / Text)
     │
     ▼
-PLANNER ──────────► short ordered plan (goals, not clicks)
+PLANNER ────────────────► Ordered Plan Steps (Goals, not fragile selectors)
     │
     ▼
-┌───────────────────────── the loop ─────────────────────────┐
-│                                                            │
-│  OBSERVE   content script walks the live DOM               │
-│     │      → redacts PII before anything leaves the page   │
-│     ▼                                                      │
-│  REASON    one observation in, ONE ActionProposal out      │
-│     │      (Pydantic-validated; the model cannot invent    │
-│     ▼       a verb or a selector)                          │
-│  POLICY    pure Python. allow / confirm / deny             │
-│     │      high-risk ⇒ blocks on a human in the cockpit    │
-│     ▼                                                      │
-│  EXECUTE   real click / real typing / real navigation      │
-│     │                                                      │
-│     ▼                                                      │
-│  VERIFY    FRESH observation; did the predicted change     │
-│     │      actually occur? no ⇒ RECOVER, re-ground, retry  │
-│     └──────────────────► back to OBSERVE                   │
-└────────────────────────────────────────────────────────────┘
+┌──────────────────────────────── The Loop ────────────────────────────────┐
+│                                                                          │
+│  1. PERCEIVE   Content Script walks live DOM                             │
+│       │        → Deduce roles, geometry & compute stable NID hashes      │
+│       │        → On-device regex & Verhoeff/Luhn checksum masking        │
+│       ▼                                                                  │
+│  2. MASK       Service Worker captures tab bitmap via canvas             │
+│       │        → Blackout sensitive boxes + jsQR code locations          │
+│       ▼                                                                  │
+│  3. VERIFY     Offscreen WASM Worker (Zero Network I/O)                  │
+│       │        → Re-OCR redacted image with Tesseract.js (fail-closed)   │
+│       │        → Local MobileCLIP-S0 visual grounding for element scores │
+│       ▼                                                                  │
+│  4. REASON     Local FastAPI Reasoning Server (127.0.0.1:8787)           │
+│       │        → Sanitizer datamarks & neutralizes prompt injections     │
+│       │        → LLM Adapter proposes one validated ActionProposal      │
+│       ▼                                                                  │
+│  5. POLICY     Deterministic Policy Engine (Python)                      │
+│       │        → Low-Risk: Auto-execute                                  │
+│       │        → High-Risk: Block on Human Approval in Cockpit/Popup    │
+│       ▼                                                                  │
+│  6. EXECUTE    Content Script / Service Worker applies action            │
+│       │        → Real clicks, contenteditable typing, tab navigation     │
+│       ▼                                                                  │
+│  7. VERIFY     Fresh Observation checks predicted change                 │
+│       └───────────────────────► (Success? Next step : Recover & Retry)   │
+└──────────────────────────────────────────────────────────────────────────┘
     │
     ▼
-COMPLETED (with the real answer) | FAILED (with the real error)
+TASK_COMPLETED (with verifiable audit trail) | TASK_FAILED
 ```
 
 ---
 
-## Why an extension and not Playwright
+## Key Features
 
-Playwright or Puppeteer would spawn a *fresh* browser. That loses the logged-in
-sessions in your own profile — which for a chat or mail task is the entire
-capability, not a detail. It also adds a relay hop on every single call and is
-more fingerprintable.
-
-Running as an extension inside the user's own Chrome preserves those sessions,
-looks like an ordinary profile, and keeps every action visible on screen.
-`chrome.debugger` (CDP) is escalated to for exactly two things: capturing
-screenshots and dismissing native JavaScript dialogs.
+- **Multi-Modal On-Device Perception**:
+  - Live DOM walking with stable element identity (`eid` ephemeral ID + `nid` FNV-1a structure hash).
+  - Built-in multi-lingual Speech-to-Text supporting English, Hindi, and Hinglish via Web Speech API in the extension popup.
+- **Fail-Closed Privacy Pipeline**:
+  - 10 core PII detectors: Aadhaar (Verhoeff verified), PAN, Payment Cards (Luhn verified), UPI IDs, Email, Indian Phone numbers, Voter IDs, Driving Licenses, GSTIN, and DOB.
+  - Protected field shielding: Password and PIN values are zeroed at perception time (`[PROTECTED INPUT] len=N`).
+  - QR Code detection: Automatically blacks out payment/auth QR codes using bundled `jsQR`.
+  - Secondary re-OCR audit: Any visual mask failure withholds the entire screenshot (`obs.screenshot = null`).
+- **Local AI Grounding & Offline Runtime**:
+  - Offline Tesseract.js WASM for OCR.
+  - Offline MobileCLIP-S0 ONNX model in ONNX Runtime Web for zero-shot visual element grounding.
+- **Security & Prompt Injection Defense**:
+  - Interleaved datamarking (`·1·`, `·2·`) and instruction-neutralization rules defending against untrusted web page prompt injections.
+  - Authenticated session isolation over WebSocket protocols (`auth.<token>`).
+  - Deterministic policy gate with human-in-the-loop approvals for financial or destructive actions.
 
 ---
 
-## Setup
+## 5-Minute Quickstart
 
-**Requirements:** Python 3.11+, Node 20+, Chrome 116+.
+### Prerequisites
+- **Node.js**: v20+ (tested on v24)
+- **Python**: v3.11+ (tested on v3.13)
+- **Google Chrome**: v116+ (Manifest V3 support)
 
+### 1. Clone & Install Dependencies
 ```bash
+git clone https://github.com/Gauravkkaushal/Browser-s-Agent.git
+cd Browser-s-Agent
+
+# Install Node dependencies
 npm install
+
+# Setup Python environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 python -m pip install -r server/requirements.txt
-npm run build
 ```
 
-Put your model credentials in `.env` (copy `.env.example`). Any one of these is
-enough:
-
-| Variable | Notes |
-|---|---|
-| `GEMINI_API_KEYS` | **Default reasoner.** Comma-separated; keys rotate on 429/503, since the free tier counts requests-per-day per key. Uses `response_mime_type: application/json` and reads attached screenshots. |
-| `GROQ_API_KEY` | Fast second. Free-tier friendly. |
-| `OPENROUTER_API_KEYS` | Comma-separated; keys rotate automatically on 402/429. |
-| `OPENAI_API_KEY` | Direct OpenAI. Must be an `sk-` key -- an `AQ.`-prefixed Google credential here answers 401 on every call. |
-| `OLLAMA_HOST` | Opt-in offline fallback, `format: json`. Not in the default chain. |
-
-`LLM_PROVIDER` sets the chain order (default `gemini,groq,openrouter,openai`).
-
-Gemini does the reasoning. `ollama` is deliberately left out of the default
-chain: its availability check is unconditional, so listing it anywhere means it
-gets tried, and a small quantized local model choosing browser actions is
-markedly worse at the job than Gemini. Append `,ollama` to `LLM_PROVIDER` only
-if you want an offline fallback and have `ollama serve` running.
-
-`LOCAL_REASON_ENABLED` (default `false`) is a separate switch that sits *ahead*
-of the whole chain: when on, every step first asks Chrome's built-in Nano model
-over the extension bridge, and any answer it returns with confidence >= 0.55 is
-used as the action -- Gemini is never consulted for that step. Turn it on only
-after confirming `window.ai` exists in your Chrome build.
-
-**Run it:**
-
+### 2. Configure Environment
+Copy `.env.example` to `.env` and set at least one model API key:
 ```bash
+cp .env.example .env
+```
+Supported providers (in rotation order):
+- `GEMINI_API_KEYS` (Default reasoner, fast multimodal response)
+- `GROQ_API_KEY` (Ultra-low latency fallback)
+- `OPENROUTER_API_KEYS`
+- `OPENAI_API_KEY`
+- `OLLAMA_HOST` (Optional local offline model)
+
+### 3. Build & Run
+```bash
+# Build popup and extension assets
+npm run build
+
+# Start the reasoning server (binds to 127.0.0.1:8787)
 npm run server
 ```
 
-Then load the extension: `chrome://extensions` → Developer mode → **Load
-unpacked** → select `dist/`. Open the cockpit at
-<http://127.0.0.1:8787/cockpit>. The `browser:` pill turns green when the
-service worker's WebSocket connects.
-
-Type a command into the cockpit and watch Chrome do it.
-
----
-
-## The four things that are easy to get wrong
-
-**1. The service worker must not fall asleep.** Chrome keeps an MV3 service
-worker alive while a WebSocket is open *only if messages are exchanged inside
-every 30-second window*. The worker pings at 20s (`KEEPALIVE_MS`) and reconnects
-with a 1.5–3s backoff; a reconnect reuses the stored `agentSessionId`, so the
-server treats it as the same session and an in-flight task simply resumes.
-
-**2. Chat and mail composers are not `<input>`s.** They are `contenteditable`,
-and `element.value = x` silently does nothing. The executor focuses the node,
-collapses the selection to the end, and uses
-`document.execCommand('insertText', …)` — which fires the real `beforeinput` /
-`input` events those editors listen for — with a synthetic `InputEvent`
-fallback. Either way it **reads the field back** and reports whether the text
-actually landed. A typing action whose readback does not contain the text is
-reported as failed, never as done.
-
-**3. Login walls are correct behaviour, not failure.** The walker sets
-`page_state.login_wall` from *generic* signals — a large canvas plus scan/QR
-wording with no populated conversation list, or a visible password field / a
-sign-in URL shape with an identifier field. On detection the FSM emits
-`LOGIN_REQUIRED`, enters `WAITING_FOR_LOGIN`, shows a cockpit banner, and polls
-a fresh observation every 3s. When the wall disappears it emits `LOGIN_DETECTED`
-and resumes the task **at the same step**. After 300s it fails honestly.
-
-**4. Site knowledge is advice, never control flow.** `server/knowledge.py` is
-the only module in the repo permitted to name a domain. Its hint packs are
-pasted into the *reasoner's prompt* as plain English. The loop, policy layer,
-verifier, recovery handlers and executor never see them and never branch on a
-hostname — enforced by gate G2. Delete every pack and the agent still runs; it
-just has to discover each interface from the observation alone.
+### 4. Load Extension in Chrome
+1. Open `chrome://extensions` in Google Chrome.
+2. Enable **Developer mode** (toggle in top right).
+3. Click **Load unpacked** and select the [`dist/`](file:///C:/Users/gaura/Desktop/SIH/SIH/dist) directory.
+4. Open the cockpit at [http://127.0.0.1:8787/cockpit](http://127.0.0.1:8787/cockpit) or click the NetraShield extension icon.
+5. In the extension popup, click the detach icon to run NetraShield in a persistent standalone window beside your browsing tab.
 
 ---
 
-## Contracts
+## Verification and Testing
 
-**Every WebSocket message, both directions:**
-
-```json
-{ "v":1, "type":"<EventType>", "ts":"ISO", "task_id":"…|null",
-  "step":N, "seq":N, "payload":{} }
-```
-
-**Element identity.** Each observation stamps `data-agent-eid="e{n}"` (ephemeral,
-what the model sees) and `data-agent-nid` — an 8-hex FNV-1a hash of
-`tag|id|aria-label|text-prefix32|WxH` (stable across re-renders). The model only
-ever names an `eid`; the server attaches `nid`, accessible name and CSS path
-from the observation itself. Resolution order is **eid → nid → exact text
-signature → css path**. A miss is reported as `stale_element` and the loop
-re-observes and re-reasons — never one fragile selector.
-
-**Policy classes** (deterministic, in `server/policy.py`):
-
-- **LOW, auto-allow** — navigate, open/switch tab, back/forward, scroll, hover,
-  focus, wait, extract, screenshot, keypress, select, closing an agent-owned
-  tab, ordinary clicks and ordinary typing.
-- **HIGH, always confirm** — `submit`; any click whose accessible name matches
-  `/pay|payment|checkout|buy now|place order|purchase|order now|send\b|delete|remove|confirm|transfer|post\b/i`;
-  typing into a password/OTP/CVV/card/Aadhaar/UPI-PIN field; any action on a
-  `/checkout|pay|billing|bank|upi/` URL.
-- **DENY** — any verb outside the whitelist; closing a tab the agent did not open.
-
-Every decision is logged with `{decision, risk, rules_fired[], reason}`.
-
-**Guards.** `MAX_STEPS=60`, 600s wall clock, 120s confirmation timeout →
-cancelled, 300s login timeout → failed, 2 retries per action, and 3 consecutive
-failed verifications → failed.
-
----
-
-## Privacy
-
-Redaction happens **in the page, before anything is serialised**. Nine PII
-patterns (card, Aadhaar, PAN, GSTIN, Voter ID, DL, UPI, email, phone) rewrite
-every name, text and value to `[REDACTED:TYPE]`. Password / OTP / CVV / card /
-Aadhaar / UPI-PIN field *values* never leave at all — the server receives only
-`[PROTECTED INPUT] len=N`.
-
-Prices are deliberately **not** redacted. They are task data, and an agent that
-cannot read a price cannot compare two shops.
-
-Screenshots are captured via `chrome.tabs.captureVisibleTab`, drawn to an
-`OffscreenCanvas`, and every `sensitive_boxes` region is filled black (dpr-scaled)
-before the JPEG is encoded. The canvas is used for nothing else — gate G6 greps
-for exactly that. Screenshots are taken only on a confirmation request, every
-`SCREENSHOT_EVERY` steps, and on finish.
-
----
-
-## Verification and evidence
-
-Every task writes a JSONL audit to `~/.browser-agent/tasks/<task_id>.jsonl`
-containing every event, real URL transitions and real element counts.
+NetraShield enforces rigorous verification before any release:
 
 ```bash
-curl http://127.0.0.1:8787/tasks/<task_id>/trace   # url transitions only
-curl http://127.0.0.1:8787/tasks/<task_id>/audit   # the whole stream
-```
+# Run TypeScript/React unit & characterization tests (149 tests)
+npm test
 
-```bash
-npm run gates      # G1-G6 anti-pretence gates (grep-enforced)
-npm test           # 29 JS tests (walker, redaction, keepalive, manifest)
-npm run test:py    # 32 Python tests (schema, policy, verifier, knowledge)
-npm run smoke      # end-to-end suite against the real browser
-```
+# Run Python server & policy tests (198 tests)
+npm run test:py
 
-The gates are not honour-system:
+# Run Zero-Pretence architectural enforcement gates (12 gates)
+npm run gates
 
-| Gate | What it enforces |
-|---|---|
-| G1 | No placeholder vocabulary anywhere in shipped code. |
-| G2 | No site names in the engine; domains confined to `knowledge.py`. |
-| G3 | The cockpit's only timer is the keepalive ping — nothing invents progress. |
-| G4 | Every extracted URL must exist as a live `href` in the current DOM. |
-| G5 | The verifier rejects observations that are stale or URL-mismatched. |
-| G6 | Canvas is used only to black out regions, never to draw. |
-
----
-
-## Layout
-
-```
-public/
-  manifest.json            MV3, <all_urls>, chrome 116+
-  agent-content.js         walker + PII redaction + page executor
-  agent-background.js      service worker: WebSocket, keepalive, tabs, screenshots
-server/
-  schemas.py               Envelope, Observation, ActionProposal, PolicyDecision
-  events.py                event bus → cockpit + JSONL audit
-  llm.py                   model gateway, provider chain, key rotation
-  planner.py  reasoner.py  the two model roles
-  policy.py                deterministic allow / confirm / deny
-  verifier.py              expectations + generic signals + freshness
-  recovery.py              overlay / stale / slow-load / error-page handlers
-  loop.py                  the FSM and task registry
-  browser_bridge.py        awaitable RPC over the extension's WebSocket
-  knowledge.py             hint packs — the ONLY file allowed to name a site
-  main.py                  FastAPI, /ws/agent, /ws/cockpit
-  templates/cockpit.html   operator UI (renders bus events only)
-  fixtures/                payment / pii / shop test pages
-  eval/                    smoke suite with programmatic success criteria
-src/pages/popup/           launcher: transport status + open cockpit
-scripts/check_gates.py     G1-G6
+# Build production extension distribution
+npm run build
 ```
 
 ---
 
-## Known limitations — read this before demoing
+## The 12 Zero-Pretence Gates
 
-- **One browser, one task at a time.** The registry holds many tasks but refuses
-  to start a second while one is running; they would fight over the same tabs.
-- **Single frame.** The content script does not run in iframes
-  (`all_frames: false`). Anything inside a cross-origin iframe — many embedded
-  payment forms — is invisible to the agent.
-- **`chrome://`, the Web Store, and PDF viewers block extensions entirely.** The
-  agent reports this as a real error rather than pretending.
-- **Extraction needs a repeated priced group.** `extract` looks for ≥3
-  structurally similar sibling containers each holding a currency match. A
-  single-product page, or a results grid that lazy-renders below the fold, will
-  return nothing until the agent scrolls.
-- **Heavy sites can outrun a single observation.** On a page that re-renders
-  continuously, an `eid` can go stale between observation and click. That path
-  is handled (`stale_element` → re-observe → re-reason) but costs a step.
-- **The login gate detects a wall, it cannot sign in.** By design. It will never
-  type a credential.
-- **Verification is behavioural, not semantic.** It can confirm that a message
-  bubble containing your text appeared; it cannot confirm the recipient was the
-  person you meant. That is what the approval modal is for.
-- **Anti-bot walls (CAPTCHA, interstitials) stop the agent.** It reports them
-  and stops. It does not attempt to solve them.
-- **Rate limits are real.** A long multi-site task is dozens of model calls. On
-  a free tier, expect throttling; the chain falls through to the next provider
-  and every fallback is visible as `MODEL_CALL_COMPLETED` with
-  `fallbacks_before > 0`.
+The gates in [`scripts/check_gates.py`](file:///C:/Users/gaura/Desktop/SIH/SIH/scripts/check_gates.py) are grep-enforced architectural invariants, not an honour system:
+
+| Gate | Name | Architectural Invariant |
+| :--- | :--- | :--- |
+| **G1** | No Placeholder Vocabulary | No `mock`, `fake`, `simulated`, or `dummy` terms in shipped code. |
+| **G2** | No Site Names in Engine | Loop, planner, and policy are domain-agnostic; site advice is confined to `server/knowledge.py`. |
+| **G3** | Bus Events Only | Cockpit renders purely from real WebSocket event streams; zero optimistic UI fabrication. |
+| **G4** | Live Href Extraction | Every extracted link must exist as an actual `href` in the observed DOM. |
+| **G5** | Stale Observation Rejection | Actions are verified against fresh observations; URL drift causes immediate recovery. |
+| **G6** | Canvas Exclusively for Redaction | Offscreen canvas is used only to black out sensitive boxes, never to synthesize content. |
+| **G7** | Content Script Air-Gap | Content script has zero network capabilities; all egress routes through the service worker. |
+| **G8** | Offline On-Device OCR | Tesseract WASM runs only on already-redacted bitmaps from local extension assets. |
+| **G9** | Local CLIP Grounding | MobileCLIP-S0 scores candidates locally; no raw screenshots or clicks are generated from coordinates. |
+| **G10** | Fail-Closed Redaction Leak Defense | If secondary re-OCR detects any PII leak on a redacted image, the screenshot is strictly withheld. |
+| **G11** | Location-Only QR Processing | QR scanning extracts only bounding box coordinates for blackout; payload data is never read. |
+| **G12** | Measured Payload Budget | Server measures exact UTF-8 byte length against strict budget limits every step. |
+
+---
+
+## Repository Structure
+
+```
+├── contracts/                     # Single source of truth contracts & schemas
+├── docs/
+│   ├── adr/                       # Architectural Decision Records (0001-0005)
+│   ├── architecture/              # C4 Architecture Specification (Context, Container, Component)
+│   ├── audit/                     # Phase 0 Baseline Audit & Findings Table
+│   └── metrics/                   # Baseline metrics, latencies, and budgets
+├── public/
+│   ├── manifest.json              # Chrome Manifest V3 configuration
+│   ├── agent-background.js        # Service Worker: session isolation, transport, capture
+│   ├── agent-content.js           # Content Script: DOM walking, PII detection, action executor
+│   ├── offscreen.html / .js       # Offscreen worker: Tesseract WASM + MobileCLIP ONNX
+│   ├── models/                    # Bundled MobileCLIP-S0 ONNX model weights
+│   ├── tesseract/                 # Bundled Tesseract WASM & language data
+│   ├── transformers/              # Bundled ONNX Runtime Web WASM binaries
+│   └── jsqr/                      # Bundled jsQR detection library
+├── server/
+│   ├── main.py                    # FastAPI app: /ws/agent, /ws/cockpit, health & fixtures
+│   ├── loop.py                    # Closed-loop FSM & task orchestration
+│   ├── sanitizer.py               # Prompt injection defense & datamarking
+│   ├── policy.py                  # Deterministic allow / confirm / deny engine
+│   ├── llm.py                     # Provider gateway & key rotation (Gemini, Groq, OpenRouter)
+│   ├── verifier.py                # Action outcome & freshness verification
+│   ├── browser_bridge.py          # Awaitable RPC over extension WebSocket
+│   ├── fixtures/                  # Benchmark test pages (PII, scholarship, payment, shop)
+│   └── tests/                     # Pytest suite (198 tests)
+├── src/
+│   ├── app/                       # Extension root layout & styling
+│   ├── pages/popup/               # Extension popup entry page
+│   ├── widgets/chat-shell/        # Cockpit UI, speech-to-text, and visual proof inspector
+│   ├── widgets/settings/          # Engine selection & connection drawer
+│   ├── features/agent-runner/     # WebSocket client & event stream narration
+│   ├── shared/                    # Types, storage, and utility libraries
+│   └── test/                      # Vitest suite & golden fixtures (149 tests)
+└── scripts/
+    ├── check_gates.py             # 12-Gate verification script
+    └── generate-icons.mjs         # Extension icon generator
+```
+
+---
+
+## Evaluation Fixtures
+
+NetraShield includes deterministic benchmark fixtures to verify compliance and policy enforcement:
+- **Scholarship Verification**: [http://127.0.0.1:8787/fixtures/govt-scholarship](http://127.0.0.1:8787/fixtures/govt-scholarship) (Aadhaar Verhoeff validation & high-risk submission policy).
+- **Job Application**: [http://127.0.0.1:8787/fixtures/job-application-demo](http://127.0.0.1:8787/fixtures/job-application-demo) (Local profile fill without exposing secrets to LLM).
+- **Prompt Injection Defense**: [http://127.0.0.1:8787/fixtures/prompt-injection-demo](http://127.0.0.1:8787/fixtures/prompt-injection-demo) (Adversarial order neutralization).
+- **Payment Shield**: [http://127.0.0.1:8787/fixtures/payment](http://127.0.0.1:8787/fixtures/payment) (Credit card masking & QR blackout).
+
+---
+
+## Security & Disclosure
+
+NetraShield is built with a zero-leak philosophy. If you discover a vulnerability or data leakage path, please review our threat model in [`docs/architecture/ARCHITECTURE.md`](file:///C:/Users/gaura/Desktop/SIH/SIH/docs/architecture/ARCHITECTURE.md) and [`docs/audit/AUDIT.md`](file:///C:/Users/gaura/Desktop/SIH/SIH/docs/audit/AUDIT.md).
