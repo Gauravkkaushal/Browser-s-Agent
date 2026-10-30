@@ -54,8 +54,9 @@ describe('bundled CLIP model files are not corrupt or truncated', () => {
     expect(wasm.subarray(0, 4)).toEqual(Buffer.from([0x00, 0x61, 0x73, 0x6d])) // '\0asm'
   })
 
-  it('ships the transformers.js web bundle', () => {
-    expect(fs.existsSync(path.join(ROOT, 'public/transformers/transformers.web.min.js'))).toBe(true)
+  it('ships the self-contained transformers.js bundle (no bare onnxruntime import)', () => {
+    const bundle = fs.readFileSync(path.join(ROOT, 'public/transformers/transformers.min.js'), 'utf8')
+    expect(bundle).not.toMatch(/from\s*["']onnxruntime-web/)
   })
 })
 
@@ -64,7 +65,7 @@ describe('offscreen document runs CLIP fully offline', () => {
     expect(offscreen).toContain('env.allowRemoteModels = false')
     expect(offscreen).toContain('env.allowLocalModels = true')
     expect(offscreen).toContain("env.localModelPath = chrome.runtime.getURL('models/')")
-    expect(offscreen).toContain("env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('transformers/ort/')")
+    expect(offscreen).toContain("wasm: chrome.runtime.getURL('transformers/ort/ort-wasm-simd-threaded.wasm')")
     expect(offscreen).not.toMatch(/https?:\/\//)
   })
 

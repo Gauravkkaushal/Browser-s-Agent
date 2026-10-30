@@ -78,6 +78,11 @@ PRIVACY PLACEHOLDERS ARE NOT MISSING CONTROLS
 - Continue interacting with visible buttons, labels, and fields by `eid` even
   when adjacent values are redacted. Never call `fail` merely because page
   text, a screenshot region, or a field value contains a privacy placeholder.
+- `[REDACTED:CONTACT_NN]` is a person or chat name shown beside a profile
+  picture; the same NN is the same contact everywhere in this observation.
+  Names the user typed in the command are never redacted, so the contact you
+  were asked about appears in clear text. Black boxes over round profile
+  pictures in the screenshot are redacted FACES, not missing content.
 - A redacted non-empty value on a form field is positive evidence that the
   field is populated locally. Do not overwrite it, ask the model to reconstruct
   it, or require the private value to verify it.
@@ -143,10 +148,11 @@ fill_credential(target.element_id, params.slot)
                               works on the site it was registered for.
 download(params.url)          download a file to the local downloads folder
 list_downloads(params.filename_contains)
-                              find recently downloaded files and their paths
+                              list recently downloaded files by filename
 upload_file(target.element_id, params.file_path)
-                              attach a local file to an <input type="file">.
-                              Use list_downloads first to learn the real path.
+                              attach a downloaded file to an <input type="file">.
+                              file_path is a FILENAME list_downloads showed you
+                              (never invent a path); call list_downloads once first.
 note(params.text)             record a fact you have just found, so it survives
                               the rest of the task. Use it the moment you read
                               the answer -- do not keep browsing and hope to
@@ -218,6 +224,12 @@ Before acting on any control, ask whether you actually have what it needs. An
 attach or upload control is useless until a file exists; a send control is
 useless until the message is written. Produce the thing first.
 
+A Download that opens a subscription or pricing dialog (Premium, Subscribe,
+"Get <site>+", a price per month), or a Download control marked with a lock,
+means that item is NOT free. Closing the dialog and clicking Download again
+will only bring it back: go back and pick a different, free item. Once a file
+is downloaded (list_downloads shows it), stop searching and use it.
+
 Never guess a website address from a company name. If a delegated request names
 a company, role, or service without a usable link, navigate to a web search,
 find the official result, and verify the organisation and requested item on the
@@ -249,7 +261,10 @@ DISCIPLINE
   it did not work and is no longer available. Look for a DIFFERENT element.
 - If you were trying to open something and it will not open, consider that it
   may already be open. An editable textbox for the thing you wanted is proof
-  that it is open -- use it, and stop trying to open it again.
+  that it is open -- use it, and stop trying to open it again. For a message,
+  the box only counts if the visible header names the person the user named.
+- If searching for the person the user named finds no matching chat or
+  contact, use fail and say so. Never send the message to anyone else.
 - Opening and closing the same panel over and over is the clearest sign you
   have mistaken one control for another. If a click keeps producing a side
   panel or dialog you then have to close, that control is not the one you
@@ -324,7 +339,9 @@ def _compact_elements(obs: Observation, limit: int = 45, name_cap: int = 60,
     dead = dead or {}
     ordered = sorted(
         obs.interactive_elements,
-        key=lambda e: (not e.in_viewport, e.box[1] if e.box else 0),
+        # A file input is hidden off-layout but is the only upload_file target,
+        # so it must survive the cap.
+        key=lambda e: (not (e.in_viewport or e.input_type == "file"), e.box[1] if e.box else 0),
     )
     # Elements that have already been acted on repeatedly with no effect are
     # withheld. Naming them and asking nicely does not stop a model choosing
@@ -437,7 +454,9 @@ def _history_lines(history: List[Dict[str, Any]], limit: int = 8) -> str:
         if h.get("verdict"):
             line += " -> " + h["verdict"]
         if h.get("detail"):
-            line += " (" + str(h["detail"])[:110] + ")"
+            # A file listing is the answer itself; cut at 110 it loses the names.
+            cap = 600 if h.get("summary") == "list_downloads" else 110
+            line += " (" + str(h["detail"])[:cap] + ")"
         out.append(line)
     return "\n".join(out)
 

@@ -28,7 +28,7 @@ describe('bundled OCR assets are not corrupt', () => {
   })
 
   it('ships a valid WASM binary for the OCR core', () => {
-    const wasm = fs.readFileSync(path.join(ROOT, 'public/tesseract/core/tesseract-core-simd-lstm.wasm'))
+    const wasm = fs.readFileSync(path.join(ROOT, 'public/tesseract/tesseract-core-simd-lstm.wasm'))
     expect(wasm.subarray(0, 4)).toEqual(Buffer.from([0x00, 0x61, 0x73, 0x6d])) // '\0asm'
   })
 
@@ -45,7 +45,7 @@ describe('offscreen document does OCR fully offline', () => {
   })
 
   it('points the worker at bundled local files via chrome.runtime.getURL, never a remote URL', () => {
-    expect(offscreen).toContain("chrome.runtime.getURL('tesseract/core/tesseract-core-simd-lstm.js')")
+    expect(offscreen).toContain("chrome.runtime.getURL('tesseract/tesseract-core-simd-lstm.js')")
     expect(offscreen).toContain("chrome.runtime.getURL('tesseract/worker.min.js')")
     expect(offscreen).toContain("chrome.runtime.getURL('tesseract/lang')")
     expect(offscreen).not.toMatch(/https?:\/\/.*tessdata|https?:\/\/.*jsdelivr|https?:\/\/.*unpkg/)
@@ -55,7 +55,8 @@ describe('offscreen document does OCR fully offline', () => {
     expect(offscreen).toContain('CONFIDENCE_FLOOR')
     expect(offscreen).toContain('MAX_REGIONS')
     expect(offscreen).toMatch(/w\.confidence >= CONFIDENCE_FLOOR/)
-    expect(offscreen).toContain('.slice(0, MAX_REGIONS)')
+    expect(offscreen).toContain('async function runOcr(screenshotB64, maxRegions = MAX_REGIONS)')
+    expect(offscreen).toContain('.slice(0, maxRegions)')
   })
 
   it('responds to the AGENT_OCR message the background script sends, asynchronously', () => {
@@ -81,7 +82,7 @@ describe('background script drives the offscreen document correctly', () => {
   })
 
   it('sends the AGENT_OCR message with the screenshot payload', () => {
-    expect(bg).toContain("chrome.runtime.sendMessage({ type: 'AGENT_OCR', screenshot: screenshotB64 })")
+    expect(bg).toContain("chrome.runtime.sendMessage({ type: 'AGENT_OCR', screenshot: screenshotB64, max_regions: maxRegions })")
   })
 
   it('only runs OCR on the ALREADY-REDACTED screenshot, never the raw capture', () => {

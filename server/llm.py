@@ -31,7 +31,11 @@ from .events import bus
 # ladder even got to try the next rung -- and the whole point of having a ladder
 # is that the next rung is usually fine. Connecting is given a short leash;
 # reading is given enough room for a slow-but-alive model.
-HTTP_TIMEOUT = httpx.Timeout(connect=6.0, read=45.0, write=15.0, pool=5.0)
+# 20s read: a healthy lite call answers in ~5s, so anything past 20s is a hung
+# request, and the hedge below has usually answered long before then.
+HTTP_TIMEOUT = httpx.Timeout(connect=6.0, read=20.0, write=15.0, pool=5.0)
+# How long one Gemini rung gets before the next rung is asked in parallel.
+HEDGE_AFTER_S = 4.0
 _CLIENT: Optional[httpx.AsyncClient] = None
 
 
@@ -82,8 +86,10 @@ class Provider:
 
 
 # A rate-limited request is worth waiting out only if the window is short.
-# Anything longer and we are better off dropping to the next model.
-MAX_429_WAIT_S = 15.0
+# Anything longer and we are better off dropping to the next model. Kept tiny:
+# free tiers (Groq: 8k tokens/min vs ~7k per step) are throttled most of the
+# minute, and sitting out 10s per rung stalled a step for 30s+ before Gemini.
+MAX_429_WAIT_S = 1.0
 
 
 def _parse_reset(value: str) -> Optional[float]:
@@ -270,84 +276,114 @@ class Gemini(Provider):
     async def complete(self, role: str, system: str, user: str,
                        image_b64: str = "") -> Tuple[str, str]:
         errors: List[str] = []
-        keys = config.GEMINI_API_KEYS or [""]
         # Keys the API has already refused outright during this call. Retrying
         # them on the next rung only wastes a round trip each time.
         dead: set = set()
-        for model in self._models_for(role):
-            parts: List[Dict[str, Any]] = [{"text": user}]
-            if image_b64:
-                parts.append({"inline_data": {"mime_type": "image/jpeg",
-                                              "data": image_b64}})
-            body = {
-                "systemInstruction": {"parts": [{"text": system}]},
-                "contents": [{"role": "user", "parts": parts}],
-                "generationConfig": self._generation_config(model),
-            }
-            url = ("https://generativelanguage.googleapis.com/v1beta/models/"
-                   + model + ":generateContent")
-
-            # The free tier's request-per-day allowance is counted per KEY, so
-            # a second key is a second day's worth. Rotate through them before
-            # stepping down to a weaker model: a fresh key on the good rung
-            # beats an exhausted key on a worse one.
-            res = None
-            throttled = 0
-            for offset in range(len(keys)):
-                idx = (self._key_index + offset) % len(keys)
-                if idx in dead:
-                    continue
-                try:
-                    attempt = await client().post(
-                        url, json=body,
-                        headers={"x-goog-api-key": keys[idx],
-                                 "Content-Type": "application/json"},
-                    )
-                except httpx.HTTPError as exc:
-                    errors.append("gemini/%s -> %s" % (model, exc))
-                    continue
-                if attempt.status_code in (429, 503):
-                    # This key is spent (or the model is busy); try the next.
-                    throttled += 1
-                    continue
-                if attempt.status_code in (401, 403):
-                    # A revoked or unauthorised key answers this on EVERY model,
-                    # so without skipping it here one dead key poisons the whole
-                    # ladder -- every rung fails on the same permission error
-                    # while two working keys sit unused behind it.
-                    dead.add(idx)
-                    throttled += 1
-                    continue
-                self._key_index = idx
-                res = attempt
-                break
-
-            if res is None:
-                errors.append(
-                    "gemini/%s -> all %d key(s) throttled, refused or unreachable%s"
-                    % (model, throttled or len(keys),
-                       " (%d key(s) permanently refused)" % len(dead) if dead else ""))
-                continue
-            if res.status_code >= 400:
-                detail = ""
-                try:
-                    detail = str(res.json().get("error", {}).get("message", ""))[:140]
-                except ValueError:
-                    detail = res.text[:140]
-                errors.append("gemini/%s -> HTTP %d %s" % (model, res.status_code, detail))
-                continue
-
+        models = list(self._models_for(role))
+        i = 0
+        while i < len(models):
+            running = [asyncio.create_task(
+                self._try_model(models[i], system, user, image_b64, errors, dead))]
+            i += 1
             try:
-                data = res.json()
-                parts = data["candidates"][0]["content"]["parts"]
-                text = "".join(p.get("text", "") for p in parts)
-                if not text.strip():
-                    raise KeyError("empty text")
-                return text, model
-            except (ValueError, KeyError, IndexError) as exc:
-                errors.append("gemini/%s -> malformed response: %s" % (model, exc))
-                continue
+                while running:
+                    # Gemini's latency swings from ~5s to 15s+ on the same request.
+                    # When a rung is slow, ask the next rung too and take whichever
+                    # answers first -- the tail, not the median, is what users feel.
+                    hedge = len(running) == 1 and i < len(models)
+                    done, _ = await asyncio.wait(
+                        running, timeout=HEDGE_AFTER_S if hedge else None,
+                        return_when=asyncio.FIRST_COMPLETED)
+                    if not done:
+                        running.append(asyncio.create_task(
+                            self._try_model(models[i], system, user, image_b64, errors, dead)))
+                        i += 1
+                        continue
+                    for task in done:
+                        running.remove(task)
+                        if task.result() is not None:
+                            return task.result()
+            finally:
+                for task in running:
+                    task.cancel()
         raise ModelError(" | ".join(errors[:6]) or "gemini: no usable model")
+
+    async def _try_model(self, model: str, system: str, user: str, image_b64: str,
+                         errors: List[str], dead: set) -> Optional[Tuple[str, str]]:
+        """One rung: every live key on one model. None (with errors noted) on failure."""
+        keys = config.GEMINI_API_KEYS or [""]
+        parts: List[Dict[str, Any]] = [{"text": user}]
+        if image_b64:
+            parts.append({"inline_data": {"mime_type": "image/jpeg",
+                                          "data": image_b64}})
+        body = {
+            "systemInstruction": {"parts": [{"text": system}]},
+            "contents": [{"role": "user", "parts": parts}],
+            "generationConfig": self._generation_config(model),
+        }
+        url = ("https://generativelanguage.googleapis.com/v1beta/models/"
+               + model + ":generateContent")
+
+        # The free tier's request-per-day allowance is counted per KEY, so
+        # a second key is a second day's worth. Rotate through them before
+        # stepping down to a weaker model: a fresh key on the good rung
+        # beats an exhausted key on a worse one.
+        res = None
+        throttled = 0
+        for offset in range(len(keys)):
+            idx = (self._key_index + offset) % len(keys)
+            if idx in dead:
+                continue
+            try:
+                attempt = await client().post(
+                    url, json=body,
+                    headers={"x-goog-api-key": keys[idx],
+                             "Content-Type": "application/json"},
+                )
+            except httpx.HTTPError as exc:
+                errors.append("gemini/%s -> %s" % (model, exc))
+                continue
+            if attempt.status_code in (429, 503):
+                # This key is spent (or the model is busy); try the next.
+                throttled += 1
+                continue
+            if attempt.status_code in (401, 403):
+                # A revoked or unauthorised key answers this on EVERY model,
+                # so without skipping it here one dead key poisons the whole
+                # ladder -- every rung fails on the same permission error
+                # while two working keys sit unused behind it.
+                dead.add(idx)
+                throttled += 1
+                continue
+            self._key_index = idx
+            res = attempt
+            break
+
+        if res is None:
+            errors.append(
+                "gemini/%s -> all %d key(s) throttled, refused or unreachable%s"
+                % (model, throttled or len(keys),
+                   " (%d key(s) permanently refused)" % len(dead) if dead else ""))
+            return None
+        if res.status_code >= 400:
+            detail = ""
+            try:
+                detail = str(res.json().get("error", {}).get("message", ""))[:140]
+            except ValueError:
+                detail = res.text[:140]
+            errors.append("gemini/%s -> HTTP %d %s" % (model, res.status_code, detail))
+            return None
+
+        try:
+            data = res.json()
+            parts = data["candidates"][0]["content"]["parts"]
+            text = "".join(p.get("text", "") for p in parts)
+            if not text.strip():
+                raise KeyError("empty text")
+            return text, model
+        except (ValueError, KeyError, IndexError) as exc:
+            errors.append("gemini/%s -> malformed response: %s" % (model, exc))
+            return None
 
 
 class Ollama(Provider):

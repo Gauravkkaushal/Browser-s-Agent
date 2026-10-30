@@ -149,3 +149,67 @@ describe('Observation and cockpit carry qr_detected as a count only', () => {
     expect(loop).toContain('"qr_detected": obs.qr_detected')
   })
 })
+
+describe('QR-shaped regions are masked even when they do not decode', () => {
+  const body = bg.slice(bg.indexOf('function qrLikeBoxes('), bg.indexOf('async function captureRedacted('))
+  const qrLikeBoxes = new Function(`${body}; return qrLikeBoxes`)() as
+    (d: Uint8ClampedArray, w: number, h: number) => number[][]
+
+  function canvas(w: number, h: number) {
+    const data = new Uint8ClampedArray(w * h * 4).fill(255)
+    const dot = (x: number, y: number) => { const i = (y * w + x) * 4; data[i] = data[i + 1] = data[i + 2] = 0 }
+    return { data, dot }
+  }
+
+  it('finds a random module grid (an undecodable QR) where it is', () => {
+    const { data, dot } = canvas(512, 512)
+    let seed = 7
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647)
+    // 33x33 modules of 4px at (300, 100): a 132px "QR" with no valid data in it.
+    for (let my = 0; my < 33; my++) for (let mx = 0; mx < 33; mx++) {
+      if (rnd() < 0.5) continue
+      for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) dot(300 + mx * 4 + x, 100 + my * 4 + y)
+    }
+    const boxes = qrLikeBoxes(data, 512, 512)
+    expect(boxes.length).toBe(1)
+    const [x, y, bw, bh] = boxes[0]
+    expect(x).toBeGreaterThanOrEqual(290)
+    expect(y).toBeGreaterThanOrEqual(90)
+    expect(x + bw).toBeLessThanOrEqual(445)
+    expect(y + bh).toBeLessThanOrEqual(245)
+  })
+
+  it('leaves lines of text alone', () => {
+    const { data, dot } = canvas(512, 512)
+    // Twelve "text lines": dense dashes 12px tall with 14px gaps between lines.
+    for (let line = 0; line < 12; line++) for (let x = 20; x < 480; x++) {
+      if (x % 5 < 2) continue
+      for (let y = 0; y < 12; y++) dot(x, 40 + line * 26 + y)
+    }
+    expect(qrLikeBoxes(data, 512, 512)).toEqual([])
+  })
+})
+
+describe('a sideways picture is read upright and masked where the text really is', () => {
+  const body = bg.slice(bg.indexOf('function unrotateFraction('), bg.indexOf('/**', bg.indexOf('function unrotateFraction(')))
+  const unrotate = new Function(`${body}; return unrotateFraction`)() as (b: number[], r: number) => number[]
+
+  // Picture 200 wide x 100 tall; a word box sits at x 20..60, y 10..30.
+  // Turned 90 clockwise (100 x 200), point (x, y) moves to (100 - y, x).
+  const turnedCW = [ (100 - 30) / 100, 20 / 200, 20 / 100, 40 / 200 ]
+  // Turned 270 clockwise (100 x 200), point (x, y) moves to (y, 200 - x).
+  const turnedCCW = [ 10 / 100, (200 - 60) / 200, 20 / 100, 40 / 200 ]
+  const original = [20 / 200, 10 / 100, 40 / 200, 20 / 100]
+
+  it('maps a box back from a 90 degree turn', () => {
+    unrotate(turnedCW, 90).forEach((v, i) => expect(v).toBeCloseTo(original[i], 9))
+  })
+
+  it('maps a box back from a 270 degree turn', () => {
+    unrotate(turnedCCW, 270).forEach((v, i) => expect(v).toBeCloseTo(original[i], 9))
+  })
+
+  it('leaves an upright box alone', () => {
+    expect(unrotate(original, 0)).toEqual(original)
+  })
+})

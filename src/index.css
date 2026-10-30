@@ -8,41 +8,49 @@ body,
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
-  color: #182026;
+  color: #1D1D1F;
   background: transparent;
+  font-family:
+    -apple-system, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", Inter, system-ui, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
-  /* ---- NetraShield premium palette --------------------------------------
+  /* ---- NetraShield palette: light, calm, teal for "safe" ------------------
      Shared across the popup shell and any portaled surfaces (antd drawers,
      dropdowns) which mount outside .chat-popup and so need the tokens on
-     :root rather than scoped to a class. */
-  --ns-bg-0: #05060b;
-  --ns-bg-1: #0a0c15;
-  --ns-bg-2: #10131e;
-  --ns-surface: rgba(255, 255, 255, 0.045);
-  --ns-surface-strong: rgba(255, 255, 255, 0.08);
-  --ns-border: rgba(148, 163, 184, 0.16);
-  --ns-border-strong: rgba(178, 190, 255, 0.32);
-  --ns-text: #f4f3fb;
-  --ns-text-dim: #9aa2b8;
-  --ns-text-faint: #6d7590;
+     :root rather than scoped to a class. One colour family: the teal accent,
+     its soft tint, and an ink pulled toward it (the same ink as the masks). */
+  --ns-bg-0: #F5F5F7;
+  --ns-bg-1: #FFFFFF;
+  --ns-bg-2: #FBFBFD;
+  --ns-surface: #FFFFFF;
+  --ns-surface-strong: #F5F5F7;
+  --ns-border: rgba(18, 38, 31, 0.08);
+  --ns-border-strong: rgba(18, 38, 31, 0.16);
+  --ns-text: #1D1D1F;
+  --ns-text-dim: #6E6E73;
+  --ns-text-faint: #8E8E93;
 
-  --ns-violet: #8b7bff;
-  --ns-violet-strong: #7c5cff;
-  --ns-cyan: #22d3ee;
-  --ns-emerald: #34d399;
-  --ns-amber: #f0c674;
-  --ns-rose: #f87171;
+  --ns-teal: #0A7C66;
+  --ns-teal-deep: #075E4D;
+  --ns-teal-soft: #E5F4EF;
+  --ns-ink: #12261F;
+  --ns-amber: #BA7517;
 
-  --ns-gradient-brand: linear-gradient(135deg, #8b7bff 0%, #6d8dff 45%, #22d3ee 100%);
-  --ns-gradient-user: linear-gradient(135deg, #6d5bff 0%, #4f7cff 100%);
-  --ns-gradient-cta: linear-gradient(135deg, #a78bfa 0%, #7c5cff 55%, #22d3ee 130%);
+  /* Older names, kept so nothing that still reads them falls back to dark. */
+  --ns-violet: var(--ns-teal);
+  --ns-violet-strong: var(--ns-teal-deep);
+  --ns-cyan: var(--ns-teal);
+  --ns-emerald: var(--ns-teal);
+  --ns-rose: #C03A3A;
+  --ns-gradient-brand: linear-gradient(135deg, #0A7C66, #12261F);
+  --ns-gradient-user: var(--ns-teal);
+  --ns-gradient-cta: var(--ns-teal);
 
-  --ns-shadow-soft: 0 12px 32px rgba(3, 4, 10, 0.45);
-  --ns-shadow-glow: 0 0 0 1px rgba(139, 123, 255, 0.14), 0 18px 40px rgba(76, 58, 200, 0.22);
+  --ns-shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.04), 0 10px 28px -12px rgba(18, 38, 31, 0.28);
+  --ns-shadow-glow: 0 0 0 3px var(--ns-teal-soft);
 }
 
 body {
@@ -55,8 +63,8 @@ body {
 }
 
 ::selection {
-  background: rgba(139, 123, 255, 0.38);
-  color: #ffffff;
+  background: rgba(10, 124, 102, 0.18);
+  color: #1D1D1F;
 }
 
 /* ---- One scrollbar, everywhere ------------------------------------------
@@ -71,7 +79,7 @@ body {
    newer Chromium); the ::-webkit-* block is what Chrome actually honours today
    and carries the gradient, which the standard properties cannot express. */
 * {
-  scrollbar-color: rgba(139, 123, 255, 0.45) rgba(255, 255, 255, 0.05);
+  scrollbar-color: rgba(18, 38, 31, 0.22) transparent;
   scrollbar-width: thin;
 }
 
@@ -81,25 +89,24 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
   /* The inset border is what makes the thumb read as a floating pill rather
      than a bar filling the gutter. It has to match the surface behind it. */
-  border: 2px solid var(--ns-bg-1);
+  border: 3px solid var(--ns-bg-0);
   border-radius: 999px;
-  background: linear-gradient(180deg, #8b7bff, #4f7cff);
+  background: rgba(18, 38, 31, 0.2);
   transition: background 0.2s ease;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, #a190ff, #6b93ff);
+  background: rgba(18, 38, 31, 0.34);
 }
 
 ::-webkit-scrollbar-thumb:active {
-  background: linear-gradient(180deg, #b9aaff, #85a6ff);
+  background: var(--ns-teal);
 }
 
 ::-webkit-scrollbar-corner {

@@ -15,26 +15,36 @@
  * vision grounding work with the network off.
  */
 
-import {
-  env,
-  AutoTokenizer,
-  AutoProcessor,
-  CLIPTextModelWithProjection,
-  CLIPVisionModelWithProjection,
-  RawImage,
-} from './transformers/transformers.web.min.js'
-
-// Browser defaults to allowLocalModels=false and a remote HuggingFace Hub
-// host. Point both at the files bundled in the package instead -- the same
-// "on-device, not just on-localhost" discipline as the Ollama/Tesseract paths.
-env.allowRemoteModels = false
-env.allowLocalModels = true
-env.localModelPath = chrome.runtime.getURL('models/')
-env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('transformers/ort/')
-// The threaded wasm binary works single-threaded too; forcing 1 thread avoids
-// depending on cross-origin-isolation headers the offscreen document may not
-// have, trading a little speed for working everywhere without configuration.
-env.backends.onnx.wasm.numThreads = 1
+// transformers.js is loaded on first CLIP use, not at module start. As a static
+// import, any failure in it (a bundle or ORT-backend problem) killed this whole
+// module -- including the OCR listener below -- so every OCR request hung
+// forever with no error, and no picture was ever read.
+let transformers = null
+async function loadTransformers() {
+  if (transformers) return transformers
+  // The bundled build: transformers.web.min.js imports 'onnxruntime-web/webgpu'
+  // by bare name, which a browser cannot resolve -- so it never loaded at all.
+  const t = await import('./transformers/transformers.min.js')
+  const env = t.env
+  // Browser defaults to allowLocalModels=false and a remote HuggingFace Hub
+  // host. Point both at the files bundled in the package instead -- the same
+  // "on-device, not just on-localhost" discipline as the Ollama/Tesseract paths.
+  env.allowRemoteModels = false
+  env.allowLocalModels = true
+  env.localModelPath = chrome.runtime.getURL('models/')
+  // Name the plain wasm build explicitly; left to choose, this bundle asks for an
+  // asyncify build (+23MB) that the package does not need to ship.
+  env.backends.onnx.wasm.wasmPaths = {
+    mjs: chrome.runtime.getURL('transformers/ort/ort-wasm-simd-threaded.mjs'),
+    wasm: chrome.runtime.getURL('transformers/ort/ort-wasm-simd-threaded.wasm'),
+  }
+  // The threaded wasm binary works single-threaded too; forcing 1 thread avoids
+  // depending on cross-origin-isolation headers the offscreen document may not
+  // have, trading a little speed for working everywhere without configuration.
+  env.backends.onnx.wasm.numThreads = 1
+  transformers = t
+  return t
+}
 
 // MobileCLIP-S0 (Apple's edge-optimized CLIP family) -- same CLIPModel graph
 // shape as standard CLIP, so it drops into the same classes below, but the
@@ -48,12 +58,12 @@ const CLIP_MAX_CANDIDATES = 12 // bounds cost -- this scores the top DOM-ranked 
 let clipPromise = null
 function getClip() {
   if (!clipPromise) {
-    clipPromise = Promise.all([
-      AutoTokenizer.from_pretrained(CLIP_MODEL_ID),
-      CLIPTextModelWithProjection.from_pretrained(CLIP_MODEL_ID, { dtype: 'q8' }),
-      AutoProcessor.from_pretrained(CLIP_MODEL_ID),
-      CLIPVisionModelWithProjection.from_pretrained(CLIP_MODEL_ID, { dtype: 'q8' }),
-    ]).then(([tokenizer, textModel, processor, visionModel]) => (
+    clipPromise = loadTransformers().then((t) => Promise.all([
+      t.AutoTokenizer.from_pretrained(CLIP_MODEL_ID),
+      t.CLIPTextModelWithProjection.from_pretrained(CLIP_MODEL_ID, { dtype: 'q8' }),
+      t.AutoProcessor.from_pretrained(CLIP_MODEL_ID),
+      t.CLIPVisionModelWithProjection.from_pretrained(CLIP_MODEL_ID, { dtype: 'q8' }),
+    ])).then(([tokenizer, textModel, processor, visionModel]) => (
       { tokenizer, textModel, processor, visionModel }
     ))
   }
@@ -98,8 +108,10 @@ async function runClipScore(screenshotB64, candidates, query, viewport) {
     return { ok: true, scores: [], ms: 0 }
   }
   const { tokenizer, textModel, processor, visionModel } = await getClip()
+  const { RawImage } = await loadTransformers()
 
-  const blob = await (await fetch('data:image/jpeg;base64,' + screenshotB64)).blob()
+  // Not fetch(data:...): this page's connect-src does not allow data: URLs.
+  const blob = new Blob([Uint8Array.from(atob(screenshotB64), (c) => c.charCodeAt(0))], { type: 'image/jpeg' })
   const bitmap = await createImageBitmap(blob)
   const scaleX = viewport && viewport.w ? bitmap.width / viewport.w : 1
   const scaleY = viewport && viewport.h ? bitmap.height / viewport.h : 1
@@ -137,10 +149,16 @@ let workerPromise = null
 function getWorker() {
   if (!workerPromise) {
     workerPromise = Tesseract.createWorker('eng', 1, {
-      corePath: chrome.runtime.getURL('tesseract/core/tesseract-core-simd-lstm.js'),
+      // Next to worker.min.js: the core looks for its .wasm in the worker's own
+      // folder, so in a core/ subfolder every OCR call silently 404'd.
+      corePath: chrome.runtime.getURL('tesseract/tesseract-core-simd-lstm.js'),
       workerPath: chrome.runtime.getURL('tesseract/worker.min.js'),
       langPath: chrome.runtime.getURL('tesseract/lang'),
       cacheMethod: 'none', // it's a local file already; no benefit to caching it again
+      // Start the worker from the packaged file itself. The default wraps it in a
+      // blob: URL, and a blob worker may not importScripts() extension files --
+      // which made every OCR call fail with "worker.min.js failed to load".
+      workerBlobURL: false,
       gzip: true,
       logger: () => {},
     })
@@ -148,11 +166,26 @@ function getWorker() {
   return workerPromise
 }
 
-async function runOcr(screenshotB64) {
+async function runOcr(screenshotB64, maxRegions = MAX_REGIONS) {
   const started = performance.now()
   const worker = await getWorker()
-  const { data } = await worker.recognize('data:image/jpeg;base64,' + screenshotB64)
-  const words = (data.words || [])
+  // Tesseract.js 6+ returns word boxes only when blocks are asked for; data.words
+  // is gone, which is why every OCR result came back as "0 words".
+  const { data } = await worker.recognize('data:image/jpeg;base64,' + screenshotB64, {}, { blocks: true })
+  const tessLines = (data.blocks || []).flatMap((b) => b.paragraphs.flatMap((p) => p.lines))
+  // Tesseract's own lines: right for text at any angle once the picture is
+  // upright, where grouping words by height alone is not.
+  const lines = tessLines.map((l) => {
+    const ws = l.words.filter((w) => w.text && w.text.trim() && w.confidence >= CONFIDENCE_FLOOR)
+    if (!ws.length) return null
+    const x0 = Math.min(...ws.map((w) => w.bbox.x0))
+    const y0 = Math.min(...ws.map((w) => w.bbox.y0))
+    const x1 = Math.max(...ws.map((w) => w.bbox.x1))
+    const y1 = Math.max(...ws.map((w) => w.bbox.y1))
+    return { text: ws.map((w) => w.text.trim()).join(' '), box: [x0, y0, x1 - x0, y1 - y0] }
+  }).filter(Boolean)
+  const strong = tessLines.reduce((n, l) => n + l.words.filter((w) => w.confidence >= 70).length, 0)
+  const words = tessLines.flatMap((l) => l.words)
     .filter((w) => w.text && w.text.trim() && w.confidence >= CONFIDENCE_FLOOR)
     .map((w) => ({
       text: w.text.trim(),
@@ -160,20 +193,94 @@ async function runOcr(screenshotB64) {
       box: [w.bbox.x0, w.bbox.y0, w.bbox.x1 - w.bbox.x0, w.bbox.y1 - w.bbox.y0],
     }))
     .sort((a, b) => b.confidence - a.confidence)
-    .slice(0, MAX_REGIONS)
+    .slice(0, maxRegions)
   return {
     ok: true,
     regions: words,
+    lines: lines,
+    strong: strong, // confident words: how "upright" the picture read
     ms: Math.round(performance.now() - started),
   }
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.type !== 'AGENT_OCR') return false
-  runOcr(msg.screenshot)
+  runOcr(msg.screenshot, msg.max_regions || MAX_REGIONS)
     .then((res) => sendResponse(res))
     .catch((e) => sendResponse({ ok: false, error: 'ocr failed: ' + (e && e.message || e) }))
   return true // keep the message channel open for the async response
+})
+
+// Faces inside pictures (an ID-card photo, a certificate portrait). YOLOS-tiny
+// (q8, ~9.7MB, bundled) finds people; the head is the top of a person box.
+// shortcut: person detector, not a face detector -- a full-body photo blurs
+// its top half; swap in a dedicated face model if one ships for transformers.js.
+const PERSON_MODEL_ID = 'Xenova/yolos-tiny'
+const PERSON_MIN_SCORE = 0.6
+const HEAD_SHARE = 0.8 // of a person box: head, chin and neck on an ID photo
+const FACE_PAD = 0.1 // extra margin on every side, so hair and jaw edges stay covered
+
+let personPromise = null
+let faceStage = 'idle' // reported on a timeout, so a hang says where it hung
+async function findFaces(imageB64) {
+  const started = performance.now()
+  faceStage = 'loading transformers.js'
+  const t = await loadTransformers()
+  if (!personPromise) {
+    faceStage = 'loading person model'
+    personPromise = t.pipeline('object-detection', PERSON_MODEL_ID, { dtype: 'q8', device: 'wasm' })
+  }
+  const detect = await personPromise
+  faceStage = 'decoding picture'
+  // Decode with the platform, not RawImage.read: that fetch()es the data: URL,
+  // which this page's connect-src does not allow.
+  const bytes = Uint8Array.from(atob(imageB64), (c) => c.charCodeAt(0))
+  const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }))
+  // Pad to a square: this YOLOS export's position embeddings only broadcast
+  // for some aspect ratios, and a wide card crashed OrtRun ("15 by 77").
+  // Capped at 512 so the input is small and the same shape every time.
+  const side = Math.min(512, Math.max(bmp.width, bmp.height))
+  const k = side / Math.max(bmp.width, bmp.height)
+  const W = bmp.width * k
+  const H = bmp.height * k
+  const canvas = new OffscreenCanvas(side, side)
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#fff'
+  ctx.fillRect(0, 0, side, side)
+  ctx.drawImage(bmp, 0, 0, W, H)
+  const image = await t.RawImage.fromCanvas(canvas)
+  faceStage = 'detecting'
+  const found = await detect(image, { threshold: PERSON_MIN_SCORE })
+  faceStage = 'done'
+  const faces = found
+    .filter((d) => d.label === 'person')
+    .map((d) => {
+      const { xmin, ymin, xmax, ymax } = d.box
+      const padX = (xmax - xmin) * FACE_PAD
+      const padY = (ymax - ymin) * FACE_PAD
+      const x0 = Math.max(0, xmin - padX)
+      const y0 = Math.max(0, ymin - padY)
+      const x1 = Math.min(W, xmax + padX)
+      const y1 = Math.min(H, ymin + (ymax - ymin) * HEAD_SHARE + padY)
+      // Fractions of the picture (not the padded square), like the OCR boxes.
+      return [x0 / W, y0 / H, (x1 - x0) / W, (y1 - y0) / H]
+    })
+    .filter((f) => f[2] > 0 && f[3] > 0)
+  return { ok: true, faces, ms: Math.round(performance.now() - started) }
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || msg.type !== 'AGENT_FACE_STAGE') return false
+  sendResponse({ stage: faceStage })
+  return false
+})
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || msg.type !== 'AGENT_FACES') return false
+  findFaces(msg.image)
+    .then((res) => sendResponse(res))
+    .catch((e) => sendResponse({ ok: false, error: 'face detection failed: ' + (e && e.message || e) }))
+  return true
 })
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

@@ -74,6 +74,39 @@ describe('PII redaction patterns actually shipped in agent-content.js', () => {
     const text = 'Strider Lite Mens Running Shoes 4.2 out of 5'
     expect(redact(text)).toBe(text)
   })
+
+  it.each([
+    ['toll-free with country code', 'chat with +91 180 022 7575', '180'],
+    ['foreign number', 'office +1 (415) 555-0100', '555'],
+    ['landline', 'call 0120-2345678 today', '2345678'],
+    ['toll-free', 'helpline 1800 123 4567', '4567'],
+    ['OTP', 'Your OTP is 4821', '4821'],
+    ['IFSC', 'IFSC SBIN0001234', 'SBIN0001234'],
+    ['passport', 'passport J8369854', 'J8369854'],
+    ['vehicle', 'car UP16 AB 1234', 'AB 1234'],
+    ['IP address', 'login from 192.168.1.20', '192.168.1.20'],
+    ['certificate id', 'CID: IPI#83862', '83862'],
+    ['roll number', 'Roll No: 2201640100', '2201640100'],
+  ])('redacts a %s', (_kind, text, secret) => {
+    expect(redact(text)).not.toContain(secret)
+  })
+
+  it('hides a stated name and address, from the shipped balanced rules', () => {
+    const block = SOURCE.split('const STRICTER_PATTERNS = [')[1].split('\n]')[0]
+    const rules = [...block.matchAll(/regex:\s*(\/.+\/[gimsuy]*),\s*from/g)].map((m) => {
+      const body = m[1]
+      const cut = body.lastIndexOf('/')
+      return new RegExp(body.slice(1, cut), body.slice(cut + 1))
+    })
+    const hide = (t: string) => rules.reduce((s, r) => s.replace(r, '[X]'), t)
+    expect(hide('My name is Nikhil')).not.toContain('Nikhil')
+    expect(hide('My address is Ghaziabad')).not.toContain('Ghaziabad')
+  })
+
+  it('still leaves dates, times and counts alone', () => {
+    const text = 'Meeting 22-10-2026 at 10:16 pm, 58 unread, version 4.2'
+    expect(redact(text)).toBe(text)
+  })
 })
 
 describe('checksum validators reduce false-positive PII classification', () => {
@@ -128,7 +161,7 @@ describe('numbered surrogate tokens (REDACT+TOKENIZE)', () => {
   // so this proves the actual shipped behaviour, not a re-implementation.
   function loadRedactor(): { redact: (t: string) => string } {
     const start = SOURCE.indexOf('const PII_PATTERNS = [')
-    const fnStart = SOURCE.indexOf('function redact(text) {')
+    const fnStart = SOURCE.indexOf('function redact(text, ui) {')
     expect(start).toBeGreaterThan(-1)
     expect(fnStart).toBeGreaterThan(start)
     let depth = 0
@@ -320,7 +353,7 @@ describe('clicking hits what the pointer is actually over', () => {
 
 describe('the walker ranks before it caps', () => {
   it('scores on-screen and editable elements above bulk list rows', () => {
-    expect(SOURCE).toContain('if (onScreen) score += 1000')
+    expect(SOURCE).toContain('if (onScreen || fileInput) score += 1000')
     expect(SOURCE).toContain('if (editable) score += 400')
     expect(SOURCE).toContain("if (role === 'listitem' || role === 'row' || role === 'gridcell') score -= 20")
   })
@@ -401,7 +434,8 @@ describe('the NAME detector hides people, not the interface', () => {
 
   it('ships the UI-vocabulary guard that keeps control labels readable', () => {
     expect(SOURCE).toContain('const UI_VOCABULARY')
-    expect(SOURCE).toContain("if (p.type === 'NAME' && looksLikeUiChrome(match)) return match")
+    expect(SOURCE).toContain("return p.type === 'NAME' && (ui || looksLikeUiChrome(match))")
+    expect(SOURCE).toContain('if (nameIsLabel(p, match, ui)) return match')
   })
 })
 

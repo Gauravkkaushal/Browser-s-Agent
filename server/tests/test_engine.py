@@ -555,6 +555,17 @@ class TestDeadTargets:
         rows = reasoner._compact_elements(o, dead={"aaaa": "GURUBAKSH row"})
         assert [r["eid"] for r in rows] == ["e2"]
 
+    def test_a_hidden_file_input_survives_the_cap(self):
+        from server import reasoner
+        rows_in = [InteractiveElement(eid="e%d" % i, nid="n%d" % i, role="button",
+                                      name="b%d" % i, box=[0, i, 10, 10], in_viewport=True)
+                   for i in range(60)]
+        rows_in.append(InteractiveElement(eid="f1", nid="ffff", role="", input_type="file",
+                                          name="File input (accepts image/*)", box=[0, 0, 0, 0],
+                                          in_viewport=False))
+        o = Observation(url="https://chat.example/", interactive_elements=rows_in)
+        assert "f1" in [r["eid"] for r in reasoner._compact_elements(o)]
+
     def test_nothing_is_withheld_when_nothing_has_failed(self):
         from server import reasoner
         o = Observation(url="https://chat.example/", interactive_elements=self._elements())
@@ -1142,8 +1153,8 @@ def test_the_scan_reaches_past_the_start_of_a_long_page():
 
     src = (Path(__file__).parent.parent.parent / "public" / "agent-content.js").read_text(
         encoding="utf-8")
-    block = src.split("const blocks = Array.from(document.querySelectorAll(")[1][:400]
-    cap = int(re.search(r"\.slice\(0,\s*(\d+)\)", block).group(1))
+    block = src.split("function findPiiBlocks()")[1][:800]
+    cap = int(re.search(r"count < (\d+)", block).group(1))
     assert cap >= 5000, "the PII scan stops after %d elements; a chat app has more" % cap
 
 
@@ -1153,11 +1164,11 @@ def test_every_mask_says_what_it_covers_and_never_the_value():
     src = (Path(__file__).parent.parent.parent / "public" / "agent-content.js").read_text(
         encoding="utf-8")
     assert "maskedRegions.push({" in src
-    assert "kind: kindsIn(own)" in src
+    assert "kind: kindsIn(own, ui)" in src
     # The region record carries a kind and a box. If it ever carried the text
     # itself, the report would leak exactly what it claims to hide.
     region = src.split("maskedRegions.push({")[1].split("})")[0]
-    assert "own" not in region.replace("kindsIn(own)", ""), \
+    assert "own" not in region.replace("kindsIn(own, ui)", ""), \
         "a mask report must never carry the redacted text"
 
 
@@ -1166,7 +1177,7 @@ def test_the_kind_probe_never_returns_the_matched_text():
 
     src = (Path(__file__).parent.parent.parent / "public" / "agent-content.js").read_text(
         encoding="utf-8")
-    body = src.split("function kindsIn(text) {")[1].split("\n}")[0]
+    body = src.split("function kindsIn(text, ui) {")[1].split("\n}")[0]
     assert "out.push(p.type)" in body
     assert "match" not in body
 
@@ -1233,7 +1244,7 @@ def test_a_refused_key_is_dropped_rather_than_retried_on_every_rung():
 
     from server.llm import Gemini
 
-    src = inspect.getsource(Gemini.complete)
+    src = inspect.getsource(Gemini.complete) + inspect.getsource(Gemini._try_model)
     assert "dead" in src, "a permanently refused key must be remembered"
     assert "(401, 403)" in src, "401/403 means the key is refused, not throttled"
     # And a throttled key must still be distinguished from a refused one.
@@ -1325,3 +1336,24 @@ def test_a_reaction_alone_is_enough_to_call_a_click_successful():
     o = obs(elements=[el("e1", role="button", name="New meeting")])
     v = verify(act("click", "e1"), o, o, {"clicked": True, "page_reacted": True})
     assert v.verdict == "success"
+
+
+def test_a_slow_gemini_rung_is_hedged_by_the_next(monkeypatch):
+    """A rung that is still thinking after HEDGE_AFTER_S must not hold the step hostage."""
+    import asyncio
+    import time
+
+    from server import config, llm
+
+    monkeypatch.setattr(llm, "HEDGE_AFTER_S", 0.05)
+    monkeypatch.setattr(config, "GEMINI_REASONER_MODELS", ["slow", "fast"])
+
+    async def fake_try(self, model, *args):
+        await asyncio.sleep(5 if model == "slow" else 0.01)
+        return ("{}", model)
+
+    monkeypatch.setattr(llm.Gemini, "_try_model", fake_try)
+    started = time.monotonic()
+    text, model = asyncio.run(llm.Gemini().complete("reasoner", "s", "u"))
+    assert model == "fast"
+    assert time.monotonic() - started < 1
