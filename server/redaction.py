@@ -33,6 +33,14 @@ PATTERNS: List[Tuple[str, re.Pattern]] = [
     # earlier version demanded ten unbroken digits and so missed the commonest
     # form there is -- a privacy tool leaking the exact thing it exists to hide.
     ("PHONE", re.compile(r"(?:\+?91[\s-]?)?[6-9](?:[\s-]?\d){9}(?!\d)")),
+    ("PHONE", re.compile(r"\+\d{1,3}(?:[\s().-]*\d){7,12}(?!\d)")),
+    ("PHONE", re.compile(r"\b(?:0\d{2,4}[\s-]?\d{6,8}|1800[\s-]?\d{3}[\s-]?\d{3,4})\b")),
+    ("OTP", re.compile(r"\b(?:otp|one[\s-]time[\s-]password|verification code|security code|pin)\b\D{0,20}\d{4,8}\b", re.I)),
+    ("IFSC", re.compile(r"\b[A-Z]{4}0[A-Z0-9]{6}\b")),
+    ("PASSPORT", re.compile(r"\b[A-PR-WY][1-9]\d{5}[1-9]\b")),
+    ("VEHICLE", re.compile(r"\b[A-Z]{2}[\s-]?\d{1,2}[\s-]?[A-Z]{1,3}[\s-]?\d{4}\b")),
+    ("IP", re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b")),
+    ("ID", re.compile(r"\b(?:[A-Z]{0,4}ID|Roll|Reg(?:istration)?|Enrol(?:l)?ment|Ref(?:erence)?|Certificate|Application)\s*(?:No\.?|Number)?\s*[:#]\s*[A-Za-z0-9#/-]*\d[A-Za-z0-9#/-]*")),
 ]
 
 

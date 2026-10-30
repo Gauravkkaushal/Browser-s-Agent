@@ -16,7 +16,7 @@
 // compares this against the file on disk and says so loudly when Chrome is
 // still running an older copy -- a stale content script looks exactly like a
 // broken agent, and that is a miserable thing to debug.
-const AGENT_BUILD = 'b25-paste-probe-uses-textcontent'
+const AGENT_BUILD = 'b36-hidden-file-inputs'
 
 const AGENT_EID = 'agentEid'
 const AGENT_NID = 'agentNid'
@@ -45,6 +45,17 @@ const PII_PATTERNS = [
   // No leading \b: it would never match before "+", leaving the country code
   // stranded next to the redaction marker.
   { type: 'PHONE', regex: /(?:\+?91[\s-]?)?[6-9](?:[\s-]?\d){9}(?!\d)/g },
+  // Any number written with a country code -- "+91 180 022 7575", "+1 (415) 555-0100".
+  { type: 'PHONE', regex: /\+\d{1,3}(?:[\s().-]*\d){7,12}(?!\d)/g },
+  // Landlines with an STD code and toll-free numbers, which the mobile rule misses.
+  { type: 'PHONE', regex: /\b(?:0\d{2,4}[\s-]?\d{6,8}|1800[\s-]?\d{3}[\s-]?\d{3,4})\b/g },
+  { type: 'OTP', regex: /\b(?:otp|one[\s-]time[\s-]password|verification code|security code|pin)\b\D{0,20}\d{4,8}\b/gi },
+  { type: 'IFSC', regex: /\b[A-Z]{4}0[A-Z0-9]{6}\b/g },
+  { type: 'PASSPORT', regex: /\b[A-PR-WY][1-9]\d{5}[1-9]\b/g },
+  { type: 'VEHICLE', regex: /\b[A-Z]{2}[\s-]?\d{1,2}[\s-]?[A-Z]{1,3}[\s-]?\d{4}\b/g },
+  { type: 'IP', regex: /\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g },
+  // Labelled identifiers: "CID: IPI#83862", "UID: 4411-22", "Roll No: 2201640100".
+  { type: 'ID', regex: /\b(?:[A-Z]{0,4}ID|Roll|Reg(?:istration)?|Enrol(?:l)?ment|Ref(?:erence)?|Certificate|Application)\s*(?:No\.?|Number)?\s*[:#]\s*[A-Za-z0-9#/-]*\d[A-Za-z0-9#/-]*/g },
 ]
 
 const PRICE_REGEX = /(?:₹|Rs\.?|INR|\$|€|£)\s?[\d,]+(?:\.\d{1,2})?/i
@@ -131,6 +142,17 @@ const STRICTER_PATTERNS = [
   // vocabulary guard below prevents labels such as "Apply Now" and "Search
   // Jobs" from being mistaken for people, so this can safely run at balanced.
   { type: 'NAME', regex: /\b[A-Z][a-z]{2,}(?:[ -][A-Z][a-z]{1,}){1,3}\b/g, from: 'balanced' },
+  // A sender shown as "~Name: message" (an unsaved contact in a group preview).
+  { type: 'CONTACT', regex: /~\s?[^:\n~]{2,40}(?=:)/g, from: 'balanced' },
+  // Someone stating who they are or where they live: "My name is Nikhil",
+  // "mera naam Rahul hai", "My address is Ghaziabad", "Address: 12 MG Road".
+  { type: 'NAME', regex: /\b(?:my name is|name is|mera naam|naam hai)\s+[A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2}/gi, from: 'balanced' },
+  { type: 'ADDRESS', regex: /\b(?:my address is|address is|address\s*:|i live in|i live at|lives? at|staying at|located at|ghar)\s+[A-Za-z0-9][A-Za-z0-9 ,./#-]{2,60}/gi, from: 'balanced' },
+  // A greeting names the person, in any case: "Dear NAMAN VERMA", "Hi Rahul".
+  { type: 'NAME', regex: /\b(?:Dear|Hi|Hello|Hey|Attn\.?)\s+(?:(?:Mr|Mrs|Ms|Dr)\.?\s+)?[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3}/g, from: 'balanced' },
+  // A single name is still a name when a title or a "Name:" label announces it.
+  { type: 'NAME', regex: /\b(?:Mr|Mrs|Ms|Miss|Dr|Shri|Smt|Kumari)\.?\s+[A-Z][a-z]+\b/g, from: 'balanced' },
+  { type: 'NAME', regex: /\b(?:full name|name|naam)\s*[:-]\s*[A-Za-z][a-z]+(?:\s[A-Za-z][a-z]+){0,3}\b/gi, from: 'balanced' },
 ]
 
 // The furniture of an interface, not a person. Hiding these costs the agent
@@ -157,6 +179,9 @@ function looksLikeUiChrome(match) {
 // task impossible without protecting anything they have not already said.
 let keepTerms = []
 let privacyMode = 'balanced'
+// This page's contact names as one pattern (see harvestNames), typed CONTACT so
+// the UI-vocabulary guard on NAME does not let "Tech Community" or "Meta AI" through.
+let contactPattern = null
 
 function isKept(text) {
   const low = String(text).toLowerCase()
@@ -165,8 +190,12 @@ function isKept(text) {
 
 function activeExtraPatterns() {
   if (privacyMode === 'fast') return []
-  if (privacyMode === 'strict') return STRICTER_PATTERNS
-  return STRICTER_PATTERNS.filter((p) => p.from === 'balanced')
+  const base = privacyMode === 'strict'
+    ? STRICTER_PATTERNS
+    : STRICTER_PATTERNS.filter((p) => p.from === 'balanced')
+  // Contact names learned from this page come first, so a full name is
+  // replaced whole instead of piece by piece.
+  return contactPattern ? [contactPattern].concat(base) : base
 }
 
 let redactionCounts = {}
@@ -259,7 +288,7 @@ function showScanOverlay() {
     root.appendChild(style)
     root.appendChild(frame)
     document.documentElement.appendChild(scanOverlayHost)
-    scanOverlayTimer = setTimeout(hideScanOverlay, 1800)
+    scanOverlayTimer = setTimeout(hideScanOverlay, 1200)
   } catch (e) {
     scanOverlayHost = null
   }
@@ -308,7 +337,28 @@ function surrogate(type, match) {
   return '[REDACTED:' + type + '_' + String(n).padStart(2, '0') + ']'
 }
 
-function redact(text) {
+// The generic NAME rule is a guess from capitalisation. On a control or a
+// heading -- "Track Your Order", "Photo Frames", a product title -- it is
+// almost always a label, and hiding it costs the agent its way to steer.
+// Names learned from the page itself (CONTACT) still apply there.
+const UI_CONTEXT = 'a, button, nav, header, h1, h2, h3, label, option, select, '
+  + '[role="menuitem"], [role="tab"], [role="button"], [role="link"], [role="navigation"], [role="menu"], [role="menubar"]'
+
+function isUiContext(el) {
+  return !!(el && el.closest && el.closest(UI_CONTEXT))
+}
+
+function nameIsLabel(p, match, ui) {
+  return p.type === 'NAME' && (ui || looksLikeUiChrome(match))
+}
+
+function patternHits(p, text, ui) {
+  p.regex.lastIndex = 0
+  if (p.type !== 'NAME') return p.regex.test(text)
+  return (String(text).match(p.regex) || []).some((m) => !nameIsLabel(p, m, ui))
+}
+
+function redact(text, ui) {
   if (!text) return ''
   let out = String(text).replace(/\s+/g, ' ').trim()
   for (const p of PII_PATTERNS) {
@@ -321,31 +371,31 @@ function redact(text) {
       // Never hide what the operator themselves asked for.
       if (isKept(match)) return match
       // ...nor the interface's own furniture, which is how the agent steers.
-      if (p.type === 'NAME' && looksLikeUiChrome(match)) return match
+      if (nameIsLabel(p, match, ui)) return match
       return surrogate(p.type, match)
     })
   }
   return out
 }
 
+// kindsIn/hasPii decide what gets BLACKED OUT (on screen and in screenshots),
+// so they hide everything, including names from the user's own command. Only
+// redact() -- the TEXT sent to the reasoner -- keeps those (isKept), because
+// the server already has the command and the agent must find that contact.
+
 /** Which kinds of PII are in this text. The kind is reportable; the value never is. */
-function kindsIn(text) {
+function kindsIn(text, ui) {
   if (!text) return []
   const out = []
   for (const p of PII_PATTERNS.concat(activeExtraPatterns())) {
-    p.regex.lastIndex = 0
-    if (p.regex.test(text) && !isKept(text)) out.push(p.type)
+    if (patternHits(p, text, ui)) out.push(p.type)
   }
   return out
 }
 
-function hasPii(text) {
+function hasPii(text, ui) {
   if (!text) return false
-  const all = PII_PATTERNS.concat(activeExtraPatterns())
-  return all.some((p) => {
-    p.regex.lastIndex = 0
-    return p.regex.test(text) && !isKept(text)
-  })
+  return PII_PATTERNS.concat(activeExtraPatterns()).some((p) => patternHits(p, text, ui))
 }
 
 // ---------------------------------------------------------------------------
@@ -710,7 +760,600 @@ const KEEP_ROLES = [
   'listitem', 'row', 'gridcell', 'treeitem', 'dialog', 'alertdialog',
 ]
 
+// ---------------------------------------------------------------------------
+// Faces and contact names, found by structure rather than by spelling.
+//
+// A profile picture is the one place a page reliably shows a person's face, and
+// the text beside it is that person's name -- whatever its case, script or
+// symbols ("NIKHIL", "~MAN$I VERMA", "Rahul"). No regex can spell every name,
+// but every contact list, chat header and inbox puts one next to an avatar.
+// ---------------------------------------------------------------------------
+const AVATAR_MIN_PX = 16
+const AVATAR_MAX_PX = 96
+const TIME_OR_DATE = /^(?:\d{1,2}[:.]\d{2}\s*(?:am|pm)?|yesterday|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})$/i
+
+/** Small, square and round: the shape of a profile picture, not a logo or a product shot. */
+function isAvatarShape(width, height, radii) {
+  if (width < AVATAR_MIN_PX || width > AVATAR_MAX_PX) return false
+  if (Math.abs(width - height) > width * 0.2) return false
+  return radii.some((r) => {
+    const v = parseFloat(r)
+    if (!v) return false
+    return String(r).trim().endsWith('%') ? v >= 30 : v >= width * 0.3
+  })
+}
+
+/** The first line of a row/header that reads like a name, or ''. */
+function nameFromCardText(text) {
+  for (let line of String(text || '').split('\n')) {
+    line = line.replace(/^[~\s]+/, '').replace(/\s+/g, ' ').trim()
+    if (line.length < 2 || line.length > 60) continue
+    if (TIME_OR_DATE.test(line) || /^\d+$/.test(line)) continue
+    if (!/\p{L}/u.test(line)) continue
+    const words = line.toLowerCase().split(/[^\p{L}]+/u).filter(Boolean)
+    if (words.length && words.every((w) => UI_VOCABULARY.has(w))) continue
+    return line
+  }
+  return ''
+}
+
+function findAvatars() {
+  const out = []
+  for (const el of document.querySelectorAll('img, [role="img"], svg')) {
+    if (out.length >= 150) break
+    // A placeholder icon (group / unsaved contact) has no face, but in a list
+    // row it still marks the name beside it. Elsewhere an svg is just an icon.
+    const placeholder = el.tagName.toLowerCase() === 'svg'
+    if (placeholder && !el.closest('li, [role="listitem"], [role="row"], [role="gridcell"], [role="option"]')) continue
+    const r = el.getBoundingClientRect()
+    if (r.bottom < 0 || r.top > window.innerHeight || r.right < 0 || r.left > window.innerWidth) continue
+    // Round avatars are usually a square image clipped by a rounded parent.
+    const radii = []
+    for (let n = el, i = 0; n && i < 3; n = n.parentElement, i++) {
+      radii.push(window.getComputedStyle(n).borderTopLeftRadius)
+    }
+    if (isAvatarShape(r.width, r.height, radii)) out.push({ el, rect: r, placeholder })
+  }
+  return out
+}
+
+/** The name shown beside each avatar: the first name-like line of its row or header. */
+function harvestNames(avatars) {
+  const names = new Set()
+  for (const a of avatars) {
+    let card = a.el.parentElement
+    for (let i = 0; card && i < 6; card = card.parentElement, i++) {
+      const r = card.getBoundingClientRect()
+      if (r.width > window.innerWidth * 0.7 || r.height > 220) break
+      if (r.width < a.rect.width * 3) continue
+      const name = nameFromCardText(card.innerText)
+      if (name) { names.add(name); break }
+    }
+  }
+  return Array.from(names).slice(0, 300)
+}
+
+function setContactNames(names) {
+  const escaped = names
+    .sort((a, b) => b.length - a.length)
+    .map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  contactPattern = escaped.length
+    ? { type: 'CONTACT', regex: new RegExp(escaped.join('|'), 'g'), from: 'balanced' }
+    : null
+}
+
+// On-screen masks, each pinned to the element it hides. They follow that element
+// through scrolling and re-renders, and hide when it leaves the screen or its
+// text stops being PII (chat apps recycle list rows for other contacts).
+let liveMasks = []
+let liveMaskFrame = 0
+let liveMaskTicker = null
+
+function ownTextOf(el) {
+  let own = ''
+  for (const node of el.childNodes) {
+    if (node.nodeType === Node.TEXT_NODE) own += node.textContent || ''
+  }
+  return own.replace(/\s+/g, ' ').trim()
+}
+
+// A mask's identity across re-scans: same element, same spot, same kind of
+// cover. Re-scans run on every page change, so redrawing from scratch would
+// replay the entrance animation constantly; matching keys keeps the old mask.
+const maskIds = new WeakMap()
+let nextMaskId = 1
+function maskKey(t) {
+  if (!maskIds.has(t.el)) maskIds.set(t.el, nextMaskId++)
+  const rel = t.rel ? t.rel.map((v) => Math.round(v)).join(',') : ''
+  return maskIds.get(t.el) + '|' + rel + '|' + (t.blur ? 'b' : '') + (t.input ? 'i' : '')
+}
+
+/** Keep masks that are still wanted, drop the rest, and add (animated) new ones. */
+function syncLiveMasks(targets) {
+  const wanted = new Map()
+  for (const t of targets) wanted.set(maskKey(t), t)
+  const kept = []
+  for (const m of liveMasks) {
+    const t = wanted.get(m.key)
+    if (t) { m.kind = t.kind || m.kind; m.ui = !!t.ui; kept.push(m); wanted.delete(m.key) } else m.div.remove()
+  }
+  liveMasks = kept
+  drawLiveMasks(Array.from(wanted.values()))
+}
+
+/** A filled field holding a secret, masked whenever the user is not typing in it. */
+function inputNeedsMask(el) {
+  if (el === document.activeElement || !el.value) return false
+  return isProtectedField(el) || hasPii(el.value)
+}
+
+function stillSensitive(m) {
+  if (m.always || m.rel) return true
+  if (m.input) return inputNeedsMask(m.el)
+  return hasPii(textOf(m.el), m.ui)
+}
+
+/** Ancestors that clip their content (scroll panes): a row scrolled behind a
+ *  pane's edge is hidden by the page, so its mask must be cut the same way. */
+function clippingAncestors(el) {
+  const out = []
+  for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
+    const s = window.getComputedStyle(p)
+    if (s.overflowX !== 'visible' || s.overflowY !== 'visible') out.push(p)
+  }
+  return out
+}
+
+function clipToAncestors(r, ancestors) {
+  let left = r.left
+  let top = r.top
+  let right = r.left + r.width
+  let bottom = r.top + r.height
+  for (const a of ancestors) {
+    const c = a.getBoundingClientRect()
+    left = Math.max(left, c.left)
+    top = Math.max(top, c.top)
+    right = Math.min(right, c.right)
+    bottom = Math.min(bottom, c.bottom)
+  }
+  return { left: left, top: top, width: Math.max(0, right - left), height: Math.max(0, bottom - top), bottom: bottom }
+}
+
+/** Is something else drawn over this element where its mask sits? */
+function isCovered(el, r) {
+  const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+  if (!hit || hit === el || el.contains(hit) || hit.contains(el)) return false
+  // An overlay the same size as the element (a zoom/link layer) is part of it.
+  const h = hit.getBoundingClientRect()
+  const e = el.getBoundingClientRect()
+  return Math.abs(h.left - e.left) + Math.abs(h.top - e.top) + Math.abs(h.width - e.width) + Math.abs(h.height - e.height) > 16
+}
+
+function placeLiveMasks() {
+  liveMaskFrame = 0
+  for (const m of liveMasks) {
+    let r = m.el.isConnected ? m.el.getBoundingClientRect() : null
+    // A mask over part of a picture rides along with that picture.
+    if (r && m.rel) {
+      r = { left: r.left + m.rel[0], top: r.top + m.rel[1], width: m.rel[2], height: m.rel[3],
+            bottom: r.top + m.rel[1] + m.rel[3] }
+    }
+    if (r) r = clipToAncestors(r, m.clip)
+    const show = !!r && r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < window.innerHeight
+      && stillSensitive(m)
+    setImportant(m.div, 'display', show ? 'flex' : 'none')
+    if (!show) continue
+    setImportant(m.div, 'left', r.left + 'px')
+    setImportant(m.div, 'top', r.top + 'px')
+    setImportant(m.div, 'width', r.width + 'px')
+    setImportant(m.div, 'height', r.height + 'px')
+    // Something else is on top of this element (a lightbox, a dialog): keep the
+    // redaction, but quietly -- dim and blurred, behind what the user is reading.
+    const behind = isCovered(m.el, r)
+    if (behind !== m.behind) {
+      m.behind = behind
+      // A face blur stays at full strength even behind: dimming it shows the face.
+      setImportant(m.div, 'opacity', behind && !m.blur ? '0.5' : '1')
+      setImportant(m.div, 'box-shadow', behind ? 'none' : (m.blur ? MASK_BLUR.boxShadow : MASK_STYLE['box-shadow']))
+      setImportant(m.div, 'border', behind ? '1px dashed rgba(10,124,102,.5)' : (m.blur ? MASK_BLUR.border : MASK_STYLE.border))
+      if (!m.blur) {
+        setImportant(m.div, 'background', behind ? 'rgba(18,38,31,.22)' : MASK_STYLE.background)
+        setImportant(m.div, 'backdrop-filter', behind ? 'blur(8px)' : 'none')
+      }
+    }
+    const word = m.blur || behind || r.height < 12 ? '' : r.width > 64 ? m.kind : ''
+    const showLock = !m.blur && !behind && r.height >= 12 && r.width > 24
+    setImportant(m.lock, 'display', showLock ? 'block' : 'none')
+    // Only write on change: every write is a DOM mutation the page watchers see.
+    if (m.label.dataset.final !== word) {
+      m.label.dataset.final = word
+      if (word && m.fresh && !REDUCED_MOTION) decodeLabel(m.label, word)
+      else m.label.textContent = word
+    }
+    m.fresh = false
+  }
+}
+
+// The entrance: the mask covers its value from the very first frame (nothing
+// may show through), then a light rolls across it and the label decodes.
+const REDUCED_MOTION = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+const CODE_GLYPHS = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789#%&*'
+let entranceIndex = 0
+
+function decodeLabel(el, word) {
+  const started = performance.now()
+  const step = (now) => {
+    if (el.dataset.final !== word) return
+    const k = Math.min(1, (now - started) / 480)
+    const fixed = Math.floor(k * word.length)
+    let out = word.slice(0, fixed)
+    for (let i = fixed; i < word.length; i++) out += CODE_GLYPHS[(Math.random() * CODE_GLYPHS.length) | 0]
+    el.textContent = out
+    if (k < 1) requestAnimationFrame(step)
+  }
+  requestAnimationFrame(step)
+}
+
+function playEntrance(m) {
+  if (REDUCED_MOTION || !m.div.animate) return
+  const delay = (entranceIndex++ % 6) * 70 // a short stagger, so a page of masks ripples in
+  const ease = 'cubic-bezier(.22,.8,.24,1)'
+  m.sheen.animate([{ transform: 'translateX(-110%)' }, { transform: 'translateX(110%)' }],
+    { duration: 900, delay: delay, easing: ease, fill: 'both' })
+  m.div.animate([{ transform: 'scale(.96)' }, { transform: 'scale(1)' }],
+    { duration: 420, delay: delay, easing: ease })
+}
+
+function scheduleLiveMasks() {
+  if (!liveMaskFrame && liveMasks.length) liveMaskFrame = requestAnimationFrame(placeLiveMasks)
+}
+
+// Inline !important beats any page rule, including the `html > div {display:none
+// !important}` kind some sites use against injected elements -- which hid every
+// mask on such a page while the DOM said they were there.
+function setImportant(el, prop, value) {
+  el.style.setProperty(prop, value, 'important')
+}
+
+// Teal ink: the colour of "safe", deep enough that nothing shows through it.
+const MASK_STYLE = {
+  position: 'fixed', background: '#12261F', color: '#CFEFE3', display: 'flex',
+  'align-items': 'center', 'justify-content': 'center', gap: '5px', overflow: 'hidden', 'white-space': 'nowrap',
+  font: '600 10.5px/1 ui-monospace,"SF Mono","Cascadia Mono",Consolas,monospace', 'letter-spacing': '.08em',
+  'border-radius': '6px', border: '1px solid rgba(255,255,255,.08)', outline: 'none',
+  'box-shadow': '0 1px 2px rgba(0,0,0,.18), 0 6px 14px -6px rgba(18,38,31,.55)',
+  'z-index': '2147483647', 'pointer-events': 'none', opacity: '1', visibility: 'visible',
+  margin: '0', padding: '0', transform: 'none', 'box-sizing': 'border-box',
+}
+// Faces: frosted glass, never dimmed.
+const MASK_BLUR = { border: '1px solid rgba(255,255,255,.6)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,.55), 0 6px 18px -8px rgba(18,38,31,.45)' }
+const LOCK_PATH = 'M7 11V8a5 5 0 0 1 10 0v3M5 11h14v10H5z'
+
+function drawLiveMasks(targets) {
+  for (const t of targets) {
+    // A custom tag, so no page selector written for divs ever matches it.
+    const div = document.createElement('netrashield-mask')
+    div.className = 'agent-live-mask'
+    // Viewport coordinates: apps that scroll inside their own panes never move
+    // window.scrollY, so absolute+scrollY drifted off the PII.
+    for (const prop in MASK_STYLE) setImportant(div, prop, MASK_STYLE[prop])
+    if (t.blur) {
+      setImportant(div, 'background', 'rgba(255,255,255,.16)')
+      setImportant(div, 'backdrop-filter', 'blur(16px) saturate(1.2)')
+      setImportant(div, 'border', MASK_BLUR.border)
+      setImportant(div, 'box-shadow', MASK_BLUR.boxShadow)
+      // A profile picture is round; a face inside a photo is a box, and an oval
+      // inside it leaves the jaw and hair visible at its corners.
+      setImportant(div, 'border-radius', t.rel ? '14px' : '50%')
+    }
+    // The rolling light, a lock and the label, all inside the opaque cover.
+    const sheen = document.createElement('netrashield-sheen')
+    for (const [p, v] of [['position', 'absolute'], ['inset', '0'], ['pointer-events', 'none'], ['transform', 'translateX(-110%)'],
+      ['background', 'linear-gradient(100deg, transparent 20%, rgba(94,234,212,.38) 50%, transparent 80%)']]) setImportant(sheen, p, v)
+    const lock = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    lock.setAttribute('viewBox', '0 0 24 24')
+    lock.setAttribute('width', '10')
+    lock.setAttribute('height', '10')
+    lock.innerHTML = '<path d="' + LOCK_PATH + '" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"/>'
+    setImportant(lock, 'flex', 'none')
+    setImportant(lock, 'display', 'none')
+    const label = document.createElement('netrashield-label')
+    setImportant(label, 'position', 'relative')
+    div.append(sheen, lock, label)
+    document.documentElement.appendChild(div)
+    const m = {
+      el: t.el, always: t.always, blur: !!t.blur, input: !!t.input, rel: t.rel || null, ui: !!t.ui,
+      clip: clippingAncestors(t.el), key: maskKey(t),
+      kind: t.kind || 'REDACTED', div, sheen, lock, label, behind: false, fresh: true,
+    }
+    liveMasks.push(m)
+    playEntrance(m)
+  }
+  placeLiveMasks()
+  // Re-renders that are not scrolls (a new message, a recycled row) still move things.
+  if (liveMasks.length && !liveMaskTicker) liveMaskTicker = setInterval(scheduleLiveMasks, 400)
+}
+
+// Scroll events do not bubble, but they are seen in the capture phase -- this
+// catches the inner panes of chat apps, not just the window.
+document.addEventListener('scroll', scheduleLiveMasks, { capture: true, passive: true })
+window.addEventListener('resize', scheduleLiveMasks, { passive: true })
+
+function textOf(el) {
+  return (el.textContent || '').replace(/\s+/g, ' ').trim()
+}
+
+const PII_BLOCK_MAX_CHARS = 160
+const PII_BLOCK_CLIMB = 3
+
+/**
+ * The SMALLEST element whose full text holds PII. Pages split text across
+ * elements -- a search highlight turns "Haseena" into <b>Has</b>eena -- so
+ * no single element's own text holds the whole name. Start at each text node
+ * and climb a few levels until the text reads as PII; the first hit is the
+ * tightest box. A row is reached only when nothing smaller matched, and a
+ * container longer than a short line never is (no panel-sized masks).
+ */
+function findPiiBlocks() {
+  const out = []
+  const seen = new Set()
+  const MAX_MASK_AREA = window.innerWidth * window.innerHeight * 0.06
+  const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT)
+  let count = 0
+  for (let node = walker.nextNode(); node && count < 20000; node = walker.nextNode(), count++) {
+    if (!node.nodeValue || !node.nodeValue.trim()) continue
+    let el = node.parentElement
+    for (let i = 0; el && i < PII_BLOCK_CLIMB; i++, el = el.parentElement) {
+      if (seen.has(el) || isOwnNode(el)) break
+      const text = textOf(el)
+      if (text.length > PII_BLOCK_MAX_CHARS) break
+      const ui = isUiContext(el)
+      if (!hasPii(text, ui)) continue
+      // A child already holds the whole match: that child is the box, not this row.
+      if (Array.from(el.children).some((c) => hasPii(textOf(c), ui))) break
+      seen.add(el)
+      const r = el.getBoundingClientRect()
+      // A mask the size of a panel is a mistake, not a redaction.
+      if (isVisible(el, r) && r.width * r.height <= MAX_MASK_AREA) out.push({ el: el, rect: r, own: text, ui: ui })
+      break
+    }
+  }
+  return out
+}
+
+/** Our own mask nodes. Their updates are not the page changing. */
+function isOwnNode(n) {
+  // Anything inside a mask too: its label decoding and its sheen are mutations.
+  const el = n && (n.nodeType === 1 ? n : n.parentElement)
+  return !!(el && el.closest && el.closest('.agent-live-mask, [data-netrashield-scan]'))
+}
+
+function onlyOwnMutations(records) {
+  return records.every((r) => isOwnNode(r.target)
+    || (r.target === document.documentElement
+      && Array.from(r.addedNodes).concat(Array.from(r.removedNodes)).every(isOwnNode)))
+}
+
+// ---------------------------------------------------------------------------
+// Always-on redaction: every page, from the moment it loads, not only while
+// the agent is reading it. Re-runs (debounced) whenever the page changes.
+// ---------------------------------------------------------------------------
+let autoRedactTimer = null
+const AUTO_REDACT_DEBOUNCE_MS = 600
+
+/** OCR words -> lines (words whose vertical centres line up), left to right. */
+function ocrLines(words) {
+  const lines = []
+  const sorted = (words || []).slice().sort((a, b) => a.box[1] - b.box[1] || a.box[0] - b.box[0])
+  for (const w of sorted) {
+    const cy = w.box[1] + w.box[3] / 2
+    const line = lines.find((l) => Math.abs(l.cy - cy) < Math.max(l.h, w.box[3]) * 0.6)
+    if (line) line.words.push(w)
+    else lines.push({ cy: cy, h: w.box[3], words: [w] })
+  }
+  return lines.map((l) => {
+    const ws = l.words.sort((a, b) => a.box[0] - b.box[0])
+    const x0 = Math.min(...ws.map((w) => w.box[0]))
+    const y0 = Math.min(...ws.map((w) => w.box[1]))
+    const x1 = Math.max(...ws.map((w) => w.box[0] + w.box[2]))
+    const y1 = Math.max(...ws.map((w) => w.box[1] + w.box[3]))
+    return { text: ws.map((w) => w.text).join(' '), box: [x0, y0, x1 - x0, y1 - y0] }
+  })
+}
+
+// Pictures big enough to carry a document, read once per picture by on-device
+// OCR + QR detection (see scanImageForPii in agent-background.js).
+const IMAGE_MIN_W = 160
+const IMAGE_MIN_H = 100
+const imageScans = new Map() // element -> { sig, targets }
+const imageScanFailures = new WeakMap()
+let imageScanBusy = false
+
+function imageSig(el) {
+  return el.tagName === 'IMG' ? (el.currentSrc || el.src) : el.width + 'x' + el.height
+}
+
+function bigVisibleImages() {
+  return Array.from(document.querySelectorAll('img, canvas')).filter((el) => {
+    const r = el.getBoundingClientRect()
+    return r.width >= IMAGE_MIN_W && r.height >= IMAGE_MIN_H
+      && r.bottom > 0 && r.right > 0 && r.top < window.innerHeight && r.left < window.innerWidth
+  })
+}
+
+/** Image masks still valid for their picture, as live-mask targets. */
+function imageMaskTargets() {
+  const out = []
+  for (const [el, scan] of imageScans) {
+    if (!el.isConnected || scan.sig !== imageSig(el)) { imageScans.delete(el); continue }
+    out.push(...scan.targets)
+  }
+  return out
+}
+
+// Lines read off an ID card or certificate. A line that is nothing but 2-3
+// capitalised words is the holder's name there ("RAHUL KUMAR", "NAMAN VERMA");
+// a 4-4-4 digit group is the card number even when it is a sample "0000 ...".
+// Picture-only: on a web page those shapes are just as often headings.
+const CARD_WORDS = /\b(?:GOVERNMENT|INDIA|OF|THE|CARD|CERTIFICATE|UNIVERSITY|REPUBLIC|MALE|FEMALE|DOB|ADDRESS|AADHAAR|INCOME|TAX|DEPARTMENT|ELECTION|COMMISSION)\b/
+function ocrOnlyKind(text) {
+  const t = String(text).replace(/[^A-Za-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
+  if (/\b\d{4} \d{4} \d{4}\b/.test(t)) return 'AADHAAR'
+  // A roll / enrolment / card number: one token mixing letters and 4+ digits.
+  if (/\b(?=[A-Z0-9]*[A-Z])(?=(?:[A-Z]*\d){4})[A-Z0-9]{8,}\b/.test(t)) return 'ID'
+  // OCR glues frame edges and specks onto a line ("| RAHUL KUMAR"), so look for
+  // a run of 2-3 capitalised words inside it rather than demanding the whole line.
+  const run = t.match(/\b[A-Z]{2,}(?: [A-Z]{2,}){1,2}\b/)
+  if (run && !CARD_WORDS.test(run[0])) return 'NAME'
+  return ''
+}
+
+/**
+ * Where inside its element box an <img> is really drawn, as an offset from the
+ * box's top-left plus a size. object-fit: contain / scale-down shrink it into
+ * the middle; cover overflows it. Anything else fills the box exactly.
+ */
+function shownImageBox(el, r) {
+  const nw = el.naturalWidth
+  const nh = el.naturalHeight
+  const fit = el.tagName === 'IMG' && nw && nh ? window.getComputedStyle(el).objectFit : 'fill'
+  if (fit !== 'contain' && fit !== 'scale-down' && fit !== 'cover') return { dx: 0, dy: 0, width: r.width, height: r.height }
+  let s = fit === 'cover' ? Math.max(r.width / nw, r.height / nh) : Math.min(r.width / nw, r.height / nh)
+  if (fit === 'scale-down') s = Math.min(s, 1)
+  // object-position is centred by default, which is what viewers use.
+  return { dx: (r.width - nw * s) / 2, dy: (r.height - nh * s) / 2, width: nw * s, height: nh * s }
+}
+
+async function urlToDataUrl(url) {
+  const blob = await (await fetch(url)).blob()
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result)
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(blob)
+  })
+}
+
+async function scanNextImage() {
+  if (imageScanBusy || document.hidden) return
+  const el = bigVisibleImages().find((e) => !imageScans.has(e) || imageScans.get(e).sig !== imageSig(e))
+  if (!el) return
+  imageScanBusy = true
+  const sig = imageSig(el)
+  const targets = []
+  try {
+    const r = el.getBoundingClientRect()
+    // A picture is read from its own bytes (works in a background tab, at full
+    // resolution), fetched HERE with the page's origin -- the extension's CSP
+    // rightly keeps the service worker off arbitrary hosts. A cross-origin image
+    // without CORS cannot be read this way; it falls back to a screen capture.
+    let src = el.tagName === 'IMG' ? (el.currentSrc || el.src) : ''
+    if (src && !src.startsWith('data:')) {
+      try { src = await urlToDataUrl(src) } catch (e) { src = '' }
+    }
+    const res = await chrome.runtime.sendMessage({
+      type: 'AGENT_SCAN_IMAGE',
+      src: src,
+      rect: [r.left, r.top, r.width, r.height],
+      viewport: { w: window.innerWidth, h: window.innerHeight },
+    })
+    if (!res || !res.ok) throw new Error((res && res.error) || 'no answer')
+    // Fractions of the picture land on the area the picture is actually drawn
+    // in -- a viewer that letterboxes it (object-fit: contain) leaves margins.
+    const shown = shownImageBox(el, r)
+    const place = (b) => (res.fraction
+      ? [shown.dx + b[0] * shown.width, shown.dy + b[1] * shown.height, b[2] * shown.width, b[3] * shown.height]
+      : b)
+    // Tesseract's own lines when it sent them (right for a sideways card too);
+    // the page's horizontal grouping is the fallback for the screen capture.
+    const lines = res.lines
+      ? res.lines.map((l) => ({ text: l.text, box: place(l.box) }))
+      : ocrLines(res.words.map((w) => ({ text: w.text, box: place(w.box) })))
+    for (const line of lines) {
+      const kind = kindsIn(line.text)[0] || ocrOnlyKind(line.text)
+      if (kind) targets.push({ el: el, rel: line.box, kind: kind })
+    }
+    for (const q of res.qr || []) targets.push({ el: el, rel: place(q), kind: 'QR' })
+    imageScans.set(el, { sig: sig, targets: targets })
+    // Faces come from a vision model on their own request, so the text masks
+    // above show at once instead of waiting on it.
+    if (src) {
+      chrome.runtime.sendMessage({ type: 'AGENT_SCAN_FACES', src: src, rotation: res.rotation || 0 }).then((fr) => {
+        if (!fr || !fr.ok) { console.warn('[NetraShield] face scan failed:', fr && fr.error); return }
+        const scan = imageScans.get(el)
+        if (!scan || scan.sig !== sig || !fr.faces.length) return
+        for (const f of fr.faces) scan.targets.push({ el: el, rel: place(f), kind: 'FACE', blur: true })
+        scheduleAutoRedact()
+      }).catch((e) => console.warn('[NetraShield] face scan failed:', e.message))
+    }
+  } catch (e) {
+    // Capture is rate-limited and can collide with an observe; retry a few
+    // times, then stop so a picture that can never be read is not a loop.
+    const reason = String((e && e.message) || e)
+    imageScanBusy = false
+    // Only the tab on screen can be captured. Not a failure: wait to be shown
+    // (the focus / visibilitychange listeners re-run the scan then).
+    if (reason.startsWith('tab not visible')) return
+    console.warn('[NetraShield] image scan failed:', reason)
+    const tries = (imageScanFailures.get(el) || 0) + 1
+    imageScanFailures.set(el, tries)
+    if (tries >= 3) imageScans.set(el, { sig: sig, targets: [] })
+    imageScanBusy = false
+    setTimeout(scanNextImage, 1500)
+    return
+  }
+  imageScanBusy = false
+  if (targets.length) scheduleAutoRedact()
+  setTimeout(scanNextImage, 50)
+}
+
+function autoRedact() {
+  autoRedactTimer = null
+  if (document.hidden || !document.body) return
+  try {
+    const avatars = findAvatars()
+    setContactNames(harvestNames(avatars))
+    const targets = findPiiBlocks().map((b) => ({ el: b.el, ui: b.ui, kind: kindsIn(b.own, b.ui)[0] }))
+    for (const a of avatars) if (!a.placeholder) targets.push({ el: a.el, always: true, blur: true })
+    targets.push(...imageMaskTargets())
+    // Filled fields holding a secret (password, OTP, card...) -- hidden whenever
+    // the user is not typing in them; the check re-runs as focus moves.
+    for (const el of document.querySelectorAll('input:not([type=hidden]), textarea')) {
+      if (el.value && (isProtectedField(el) || hasPii(el.value))) {
+        targets.push({ el, input: true, kind: isProtectedField(el) ? 'SECRET' : kindsIn(el.value)[0] })
+      }
+    }
+    syncLiveMasks(targets)
+    scanNextImage()
+  } catch (e) { /* redaction must never break the page */ }
+}
+
+function scheduleAutoRedact() {
+  if (!autoRedactTimer) autoRedactTimer = setTimeout(autoRedact, AUTO_REDACT_DEBOUNCE_MS)
+}
+
+try {
+  new MutationObserver((records) => {
+    if (!onlyOwnMutations(records)) scheduleAutoRedact()
+  }).observe(document.documentElement, { childList: true, subtree: true, characterData: true })
+  document.addEventListener('visibilitychange', scheduleAutoRedact)
+  window.addEventListener('focus', scheduleAutoRedact)
+  // Typing changes a field's value without touching the DOM; re-check on leaving it.
+  document.addEventListener('focusout', scheduleAutoRedact, true)
+  scheduleAutoRedact()
+} catch (e) { /* no DOM to watch */ }
+
 function walk() {
+  // Masks stay up while the page is read: they live outside <body>, and the
+  // scanners skip their own nodes, so none of their text is read as content.
+  // Faces and the names beside them, before anything is redacted.
+  let avatars = []
+  try {
+    avatars = findAvatars()
+    setContactNames(harvestNames(avatars))
+  } catch (e) {
+    contactPattern = null
+  }
   redactionCounts = {}
   redactedValues = {}
   redactionOccurrences = {}
@@ -719,6 +1362,8 @@ function walk() {
   const started = performance.now()
   const errors = []
   const sensitiveBoxes = []
+  // The elements behind those boxes, for the on-screen masks.
+  const maskTargets = []
   // What each mask is for. Kinds, never values.
   const maskedRegions = []
   const dpr = window.devicePixelRatio || 1
@@ -755,19 +1400,23 @@ function walk() {
     } catch (e) {
       continue
     }
+    // A file input is almost always hidden behind a styled button (WhatsApp's
+    // attach menu, Moodle's drop zone), yet it is the only thing upload_file can
+    // set. CDP fills a hidden one fine, so keep it even when nothing stands in.
+    const fileInput = el.tagName === 'INPUT' && (el.getAttribute('type') || '').toLowerCase() === 'file'
     if (!isVisible(el, rect, style)) {
       // A styled toggle hides its real input. Measure it by the visible thing
       // that stands in for it, and keep it: the input is what holds `checked`.
       const proxy = visualProxy(el)
-      if (!proxy) continue
-      rect = proxy.rect
+      if (!proxy && !fileInput) continue
+      if (proxy) rect = proxy.rect
     }
     const onScreen = rect.bottom > 0 && rect.right > 0
       && rect.top < window.innerHeight && rect.left < window.innerWidth
     const tag = el.tagName.toLowerCase()
     const editable = isEditable(el)
     let score = 0
-    if (onScreen) score += 1000
+    if (onScreen || fileInput) score += 1000
     // A place to type is the scarcest and most valuable thing on a page.
     if (editable) score += 400
     if (['button', 'a', 'input', 'textarea', 'select'].indexOf(tag) !== -1) score += 60
@@ -794,7 +1443,10 @@ function walk() {
     const isNative = ['a', 'button', 'input', 'textarea', 'select', 'summary'].indexOf(tag) !== -1
     if (!isNative && !editable && KEEP_ROLES.indexOf(role) === -1) continue
 
-    const rawName = accessibleName(el)
+    // A hidden file input has no label; what it accepts is how the model tells
+    // the photo input from the document one.
+    const rawName = accessibleName(el) || (tag === 'input' && (el.getAttribute('type') || '').toLowerCase() === 'file'
+      ? 'File input (accepts ' + (el.getAttribute('accept') || 'any file') + ')' : '')
     const rawText = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim()
 
     // Never let a protected field's value out of the page.
@@ -836,23 +1488,27 @@ function walk() {
       if (node.nodeType === Node.TEXT_NODE) ownText += node.textContent || ''
     }
     ownText = ownText.replace(/\s+/g, ' ').trim()
+    const ui = isUiContext(el)
     const smallEnough = rect.width * rect.height
       <= window.innerWidth * window.innerHeight * 0.06
-    if (protectedField || (smallEnough && hasPii(ownText))) {
+    if (protectedField || (smallEnough && hasPii(ownText, ui))) {
       // CSS pixels. The screenshot's true scale is measured when it is taken,
       // because the captured bitmap does not reliably equal viewport * dpr.
       sensitiveBoxes.push([
         Math.round(rect.left), Math.round(rect.top),
         Math.round(rect.width), Math.round(rect.height),
       ])
+      maskTargets.push(protectedField
+        ? { el: el, input: true, kind: 'SECRET' }
+        : { el: el, ui: ui, kind: kindsIn(ownText, ui)[0] })
     }
 
     elements.push({
       eid: eid,
       nid: nid,
       role: role,
-      name: redact(rawName).slice(0, TEXT_CAP),
-      text: redact(rawText).slice(0, TEXT_CAP),
+      name: redact(rawName, ui).slice(0, TEXT_CAP),
+      text: redact(rawText, ui).slice(0, TEXT_CAP),
       tag: tag,
       box: [Math.round(rect.left), Math.round(rect.top), Math.round(rect.width), Math.round(rect.height)],
       in_viewport: inViewport,
@@ -873,52 +1529,44 @@ function walk() {
   // which hides far more than it protects and makes the page unreadable.
   // Redaction has to be surgical or nobody will trust it.
   try {
-    const MAX_MASK_AREA = window.innerWidth * window.innerHeight * 0.06
-    // Scan far enough to reach the whole page, not just its beginning.
-    //
-    // This was capped at 900 in DOM ORDER, and a chat app puts thousands of
-    // elements in the conversation list before it gets to the side panel -- so
-    // the contact's phone number, sitting in that panel in plain sight, was
-    // never even looked at. Missing the one number on screen while blacking
-    // out a video thumbnail is the exact opposite of the job.
-    //
-    // The cap can be this high because the expensive part is measured LAST:
-    // hasPii() is plain string work, and getBoundingClientRect -- which forces
-    // layout -- only runs for elements that actually contain something.
-    const blocks = Array.from(document.querySelectorAll(
-      'p, span, td, th, li, label, h1, h2, h3, h4, dd, dt, a, b, strong, em, code, div',
-    )).slice(0, 8000)
-
-    for (const b of blocks) {
-      // Only the text this element owns directly. Anything inside a child will
-      // be caught when we reach that child.
-      let own = ''
-      for (const node of b.childNodes) {
-        if (node.nodeType === Node.TEXT_NODE) own += node.textContent || ''
-      }
-      own = own.replace(/\s+/g, ' ').trim()
-      if (!own || own.length > 240) continue
-      if (!hasPii(own)) continue
-
-      const r = b.getBoundingClientRect()
-      if (!isVisible(b, r)) continue
-      // A mask the size of a panel is a mistake, not a redaction.
-      if (r.width * r.height > MAX_MASK_AREA) continue
-
+    for (const { el: b, rect: r, own, ui } of findPiiBlocks()) {
       sensitiveBoxes.push([
         Math.round(r.left), Math.round(r.top),
         Math.round(r.width), Math.round(r.height),
       ])
+      maskTargets.push({ el: b, ui: ui, kind: kindsIn(own, ui)[0] })
       // Say what this box covers -- the KIND only, never the value. A count
       // with nothing behind it cannot be checked; "PHONE at 1519,297" can.
       maskedRegions.push({
-        kind: kindsIn(own).join('+') || 'PII',
+        kind: kindsIn(own, ui).join('+') || 'PII',
         box: [Math.round(r.left), Math.round(r.top),
               Math.round(r.width), Math.round(r.height)],
       })
     }
   } catch (e) {
     errors.push('pii-scan: ' + e.message)
+  }
+
+  // Profile pictures are faces: blacked out of the screenshot, blurred on screen.
+  avatars.forEach((a, i) => {
+    if (a.placeholder) return
+    const box = [Math.round(a.rect.left), Math.round(a.rect.top),
+                 Math.round(a.rect.width), Math.round(a.rect.height)]
+    sensitiveBoxes.push(box)
+    maskTargets.push({ el: a.el, always: true, blur: true })
+    maskedRegions.push({ kind: 'FACE', box: box })
+    noteRedaction('FACE', a.el.currentSrc || a.el.src || 'avatar-' + i)
+  })
+
+  // PII read off pictures by on-device OCR: blacked out of the screenshot too.
+  for (const t of imageMaskTargets()) {
+    const r = t.el.getBoundingClientRect()
+    const box = [Math.round(r.left + t.rel[0]), Math.round(r.top + t.rel[1]),
+                 Math.round(t.rel[2]), Math.round(t.rel[3])]
+    sensitiveBoxes.push(box)
+    maskTargets.push(t)
+    maskedRegions.push({ kind: t.kind, box: box })
+    noteRedaction(t.kind, imageSig(t.el) + '@' + t.rel.join(','))
   }
 
   const focused = document.activeElement
@@ -950,36 +1598,11 @@ function walk() {
     field_count: f.querySelectorAll('input, textarea, select').length,
   }))
 
-  // Draw live masks on the screen for the hackathon demo!
+  // Draw live masks on the screen so the redaction is visible.
   try {
-    document.querySelectorAll('.agent-live-mask').forEach((el) => el.remove())
-    if (sensitiveBoxes.length > 0 && document.body) {
-      for (const b of sensitiveBoxes) {
-        const div = document.createElement('div')
-        div.className = 'agent-live-mask'
-        div.style.position = 'absolute'
-        div.style.left = (b[0] + window.scrollX) + 'px'
-        div.style.top = (b[1] + window.scrollY) + 'px'
-        div.style.width = b[2] + 'px'
-        div.style.height = b[3] + 'px'
-        div.style.backgroundColor = '#111827'
-        div.style.color = 'rgba(255, 255, 255, 0.4)'
-        div.style.display = 'flex'
-        div.style.alignItems = 'center'
-        div.style.justifyContent = 'center'
-        div.style.fontSize = '10px'
-        div.style.fontWeight = 'bold'
-        div.style.borderRadius = '2px'
-        div.style.zIndex = '2147483647' // Maximum possible z-index
-        div.style.pointerEvents = 'none' // Don't block clicks!
-        if (b[2] > 40 && b[3] > 15) {
-          div.innerText = 'REDACTED'
-        }
-        document.body.appendChild(div)
-      }
-    }
+    syncLiveMasks(maskTargets)
   } catch (e) {
-    // ignore
+    errors.push('live-mask: ' + e.message)
   }
 
   return {
@@ -1890,7 +2513,8 @@ async function doPasteTable(params) {
 }
 
 async function doWait(params) {
-  const timeout = Math.min(Number(params.timeout_ms) || 5000, 60000)
+  // 2s default: a wait whose text never shows up used to burn a full 5s.
+  const timeout = Math.min(Number(params.timeout_ms) || 2000, 60000)
   const started = Date.now()
   const needle = params.text_contains ? String(params.text_contains).toLowerCase() : null
   while (Date.now() - started < timeout) {
@@ -1933,6 +2557,20 @@ async function doDismissOverlay() {
   return { dismissed: !detectOverlay(), via: 'escape' }
 }
 
+// Wait until the page stops changing (search results rendering, a chat
+// opening) so the next observation sees the result, not the half-drawn page.
+async function waitForQuiet(quietMs = 300, maxMs = 1500) {
+  let last = Date.now()
+  let observer = null
+  try {
+    observer = new MutationObserver((records) => { if (!onlyOwnMutations(records)) last = Date.now() })
+    observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true })
+  } catch (e) { return }
+  const started = Date.now()
+  while (Date.now() - last < quietMs && Date.now() - started < maxMs) await sleep(50)
+  observer.disconnect()
+}
+
 // ---------------------------------------------------------------------------
 // ACTION DISPATCH
 // ---------------------------------------------------------------------------
@@ -1957,16 +2595,17 @@ async function execute(action) {
     case 'click': {
       const before = { url: location.href, count: document.querySelectorAll('*').length }
       const r = await doClick(el)
-      await sleep(150)
+      await waitForQuiet()
       return { ok: true, result: Object.assign({ resolution: how, before: before }, r) }
     }
     case 'type': {
       const r = await doType(el, String(params.text == null ? '' : params.text), params.replace)
+      if (r.typed) await waitForQuiet()
       return { ok: r.typed, result: Object.assign({ resolution: how }, r), error: r.typed ? undefined : r.error }
     }
     case 'keypress': {
       const r = await doKeypress(el, params.key_combo)
-      await sleep(150)
+      await waitForQuiet()
       return { ok: !!r.pressed, result: r, error: r.error }
     }
     case 'scroll': {
@@ -2063,16 +2702,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     showScanOverlay()
     Promise.resolve()
       .then(async () => {
-        const started = Date.now()
         privacyMode = message.privacy_mode || 'balanced'
         keepTerms = (message.keep_terms || []).map((t) => String(t).toLowerCase())
         const observation = walk()
-        const remaining = 700 - (Date.now() - started)
-        if (remaining > 0) await sleep(remaining)
         return { ok: true, observation }
       })
       .catch((e) => ({ ok: false, error: 'walk failed: ' + e.message }))
-      .finally(() => hideScanOverlay())
+      // The beam plays out on its own timer without holding up the agent; it
+      // only has to be gone before a screenshot, so it never lands in one.
+      .finally(() => { if (message.will_capture) hideScanOverlay() })
       .then((reply) => sendResponse(reply))
     return true
   }

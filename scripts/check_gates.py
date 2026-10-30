@@ -116,11 +116,14 @@ draws = re.findall(r"ctx\.(\w+)", bg)
 # getImageData reads pixels back out -- allowed only because the one caller,
 # detectQrBoxes(), uses them to find a QR code's LOCATION to black out next,
 # same purpose as drawImage/fillRect. It never draws with what it reads.
-allowed = {"drawImage", "fillStyle", "fillRect", "getImageData"}
+# rotate/translate turn a sideways photo of a card upright for the on-device
+# OCR and face pass only (rotateCanvas); that copy never leaves the machine.
+allowed = {"drawImage", "fillStyle", "fillRect", "getImageData", "rotate", "translate"}
 g6 = set(draws).issubset(allowed)
 gate("G6 canvas used only for redaction", g6,
      "ctx operations = %s (drawImage copies the capture, getImageData feeds QR "
-     "detection, fillRect blacks out sensitive regions -- including QR codes)"
+     "detection, rotate/translate stand a sideways card upright for local OCR, "
+     "fillRect blacks out sensitive regions -- including QR codes)"
      % sorted(set(draws)))
 
 # --- G7 --------------------------------------------------------------------
@@ -171,7 +174,7 @@ gate("G8 OCR reads only the redacted screenshot, fully offline", g8,
 g9_local = (
     "env.allowRemoteModels = false" in offscreen
     and "env.localModelPath = chrome.runtime.getURL('models/')" in offscreen
-    and "env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('transformers/ort/')" in offscreen
+    and "wasm: chrome.runtime.getURL('transformers/ort/ort-wasm-simd-threaded.wasm')" in offscreen
     and not remote.search(offscreen)
 )
 # CLIP only ever attaches a score to an eid the real DOM walk already found --

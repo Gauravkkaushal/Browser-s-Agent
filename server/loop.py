@@ -30,7 +30,7 @@ from .policy import evaluate, redact_preview
 from .redaction import redact_text
 from .sanitizer import sanitize_observation
 from .quoter import compose_message
-from .capability_gate import check as check_capability
+from .capability_gate import check as check_capability, _is_composer as is_composer
 from .vault import mask, vault
 from .schemas import (
     BROWSER_VERBS, CONTROL_VERBS, ActionProposal, Observation, Plan,
@@ -91,8 +91,9 @@ def _site_of(url: str) -> str:
         return ""
 
 
-def is_oscillation(executed: List[Dict[str, str]], signature: str) -> bool:
-    """True when the proposed action would close a second lap of an A/B cycle.
+def is_oscillation(executed: List[Dict[str, str]], signature: str) -> int:
+    """The cycle length (2 or 3) when the proposed action would close a second
+    lap of an A/B or A/B/C cycle, else 0.
 
     The repeat detector catches an action tried over and over WITHOUT effect,
     and it deliberately forgets any action that worked. That leaves a hole:
@@ -104,15 +105,66 @@ def is_oscillation(executed: List[Dict[str, str]], signature: str) -> bool:
 
     `executed` holds the actions that actually succeeded, oldest first. The
     cycle is recognised by shape alone: A, B, A already done and B proposed.
+    The three-stroke form is a dead end the agent keeps walking into: open an
+    item, click Download, close the paywall that appears, open it again.
     """
-    recent = executed[-3:]
-    if len(recent) != 3:
+    for k in (2, 3):
+        seq = [e["sig"] for e in executed[-(2 * k - 1):]] + [signature]
+        if len(seq) == 2 * k and seq[:k] == seq[k:] and len(set(seq[:k])) == k:
+            return k
+    return 0
+
+
+def is_chat_send(action: ActionProposal, obs: Observation) -> bool:
+    """Enter in a message composer, or a click on a Send control."""
+    if action.action == "keypress":
+        return (action.params.key_combo or "").lower() == "enter" and is_composer(action, obs)
+    if action.action == "click":
+        return bool(re.match(r"\s*send\b", action.target.name or "", re.I))
+    return False
+
+
+def _composer_name(action: ActionProposal, obs: Observation) -> str:
+    el = obs.element(action.target.element_id) if action.target.element_id else None
+    return ((el.name if el is not None else "") or action.target.name or "").lower()
+
+
+def recipient_missing(recipient: str, action: ActionProposal, obs: Observation,
+                      command: str = "") -> bool:
+    """True when the agent is about to type into, or send from, a composer
+    whose chat is not the person the user named -- i.e. it is in the wrong chat.
+
+    A composer that names its chat ("Type a message to group X") is the
+    authority: a group's row can mention the person ("Harshit is also in this
+    group"), which is how a link went to a whole class group. Otherwise fall
+    back to the name being visible anywhere outside an input.
+    """
+    if not recipient or action.action not in ("type", "keypress") or not is_composer(action, obs):
         return False
-    return (
-        recent[0]["sig"] == recent[2]["sig"]
-        and recent[1]["sig"] == signature
-        and recent[0]["sig"] != signature
-    )
+    wanted = re.findall(r"\w+", recipient.lower())
+    if not wanted:
+        return False
+    named = re.search(r"message to (.+)", _composer_name(action, obs))
+    if named:
+        chat = named.group(1)
+        if re.search(r"\bgroup\b", chat) and not re.search(r"\bgroup\b", (command or "").lower()):
+            return True
+        return not all(w in re.findall(r"\w+", chat) for w in wanted)
+    if action.action != "type":
+        return False
+    page = obs.page_text or ""
+    # Text sitting in an editable field (the search box above all) is what the
+    # agent typed itself, not evidence that the chat is open.
+    for el in obs.interactive_elements or []:
+        if el.is_editable:
+            for typed in (el.value, el.text):
+                if typed:
+                    page = page.replace(typed, " ")
+    seen = [page, obs.title or ""] + [
+        el.name for el in obs.interactive_elements or [] if not el.is_editable
+    ]
+    words = set(re.findall(r"\w+", " ".join(seen).lower()))
+    return not all(w in words for w in wanted)
 
 
 class TaskCancelled(Exception):
@@ -151,6 +203,9 @@ class Task:
         # above forgets successful actions on purpose; this list does not,
         # because two actions that each succeed can still undo each other.
         self._executed: List[Dict[str, str]] = []
+        # Filename -> full path from the last list_downloads. The model only
+        # ever sees filenames, and may only upload a file listed here.
+        self._downloads: Dict[str, str] = {}
         self._last_failed_signature: str = ""
         self._dead_targets: Dict[str, str] = {}
         self._last_shot_site: str = ""
@@ -373,9 +428,20 @@ class Task:
             elif verb == "list_downloads":
                 args = {"filename_contains": action.params.filename_contains}
             elif verb == "upload_file":
+                # Trust boundary: a model-chosen path could hand any file on
+                # disk to a website, and models invent paths. Only a file the
+                # browser itself reported downloading may go out.
+                name = re.split(r"[\\/]", action.params.file_path or "")[-1]
+                path = self._downloads.get(name)
+                if not path:
+                    raise BridgeError(
+                        "upload_file requires params.file_path to be a filename that "
+                        "list_downloads returned (known: %s)"
+                        % (redact_text(", ".join(self._downloads))[0]
+                           or "none -- call list_downloads first"))
                 args = {"tab_id": action.target.tab_id,
                         "element_id": action.target.element_id,
-                        "file_path": action.params.file_path}
+                        "file_path": path}
             return await bridge.request(verb, args, task_id=self.task_id)
 
         payload = action.model_dump()
@@ -506,7 +572,18 @@ class Task:
         # stuck in a two-stroke cycle that the guard was blind to by design.
         # Detect the cycle by shape: A, B, A and now B again.
         recent = self._executed[-3:]
-        if is_oscillation(self._executed, signature):
+        period = is_oscillation(self._executed, signature)
+        if period == 3:
+            # Nothing is withheld: the controls (Download, Close) are fine on
+            # the next item; it is this item that leads nowhere.
+            note = (
+                "%s have now gone round twice and ended where they started -- "
+                "this path is a dead end (often a paid/premium item behind a "
+                "subscription wall). Choose a DIFFERENT item, or use `fail`."
+                % ", ".join(repr((e.get("name") or e.get("verb") or "?")[:40])
+                            for e in self._executed[-3:])
+            )
+        elif period:
             for entry in (recent[1], recent[2]):
                 for key in (entry.get("nid"), entry.get("eid")):
                     if key:
@@ -520,6 +597,7 @@ class Task:
                 % (action.action, (action.target.name or "?")[:40],
                    recent[2].get("verb", "click"), (recent[2].get("name") or "?")[:40])
             )
+        if period:
             await bus.emit("POLICY_DENIED", {
                 "action_id": action.action_id,
                 "action": action.action,
@@ -783,9 +861,18 @@ class Task:
             self._recent_signatures = [s for s in self._recent_signatures if s != signature]
             return obs, None
 
+        # --- RIGHT RECIPIENT? ---
+        # A message must never land in someone else's chat because the named
+        # person could not be found. Stop instead of trying "another way".
+        recipient = self.plan.recipient if self.plan else ""
+        if recipient_missing(recipient, action, obs, self.command):
+            self.error = ("The open chat is not '%s' (or no such chat was found) -- "
+                          "nothing was sent." % recipient)
+            raise RuntimeError(self.error)
+
         # --- POLICY ---
         await self.set_state("POLICY_CHECK")
-        
+
         # 1. Trust boundary / capability gate
         allowed, block_reason = check_capability(
             action, obs, self.quoted_message,
@@ -881,6 +968,31 @@ class Task:
         if action.action == "type" and (result or {}).get("verified"):
             self._last_typed = action.params.text or ""
 
+        if action.action == "list_downloads":
+            # Nothing on the page changes, so there is nothing to verify: the
+            # answer IS the result, and the model has to be able to read it.
+            files = (result or {}).get("downloads") or []
+            self._downloads = {}
+            for f in files:
+                p = f.get("path") or ""
+                if p:
+                    self._downloads[re.split(r"[\\/]", p)[-1]] = p
+            listing = "; ".join(
+                "%s (%s)" % (re.split(r"[\\/]", f.get("path") or "")[-1], f.get("mime") or "?")
+                for f in files[:8] if f.get("path")
+            ) or "no downloads found"
+            self._recent_signatures = [s for s in self._recent_signatures if s != signature]
+            self.history.append({
+                "step": self.step,
+                "summary": "list_downloads",
+                "verdict": "verified",
+                # Filenames can carry a name or number; the model sees them
+                # redacted like any other page text.
+                "detail": "downloaded files, newest first (pass the filename as "
+                          "file_path): " + redact_text(listing)[0],
+            })
+            return obs, None
+
         if action.action == "extract":
             items = result.get("items") or []
             for item in items:
@@ -902,6 +1014,7 @@ class Task:
         if stale is not None:
             await bus.emit("VERIFICATION_FAILED", {
                 "action_id": action.action_id, "reason": "stale observation: " + stale,
+                "counted_as_strike": False,
             }, task_id=self.task_id, step=self.step)
             await asyncio.sleep(0.5)
             after = await self.observe()
@@ -1267,9 +1380,11 @@ class Task:
     # -- confirmation gate --------------------------------------------------
     async def _request_confirmation(self, action: ActionProposal, decision,
                                     obs: Observation) -> bool:
-        # A standing pre-authorisation covers sending, posting, paying and
-        # uploading. It never covers entering an authentication code.
-        needs_live_human = "requires-live-human" in (decision.rules_fired or [])
+        # A standing pre-authorisation covers posting, paying and uploading. It
+        # never covers entering an authentication code, nor sending a message:
+        # a wrong-chat send cannot be unsent, and one went to a class group.
+        needs_live_human = ("requires-live-human" in (decision.rules_fired or [])
+                            or is_chat_send(action, obs))
         if self.pre_approved and not needs_live_human:
             # Still classified HIGH, still logged -- answered by the standing
             # authorisation the operator gave when starting this task.
@@ -1296,6 +1411,7 @@ class Task:
             "preview": redact_preview(action, obs),
             "text_preview": action.params.text or "",
             "target_name": action.target.name or "",
+            "recipient": self.plan.recipient if self.plan else "",
             "url": obs.url,
             "reason": action.reason,
             "decision": decision.model_dump(),
@@ -1351,8 +1467,13 @@ class Task:
             # wherever the previous task happened to finish. Inheriting the last
             # task's tab is how "summarise this page" ends up answering about
             # something else entirely.
+            # The planner only needs the URL, which new_task already reports. A
+            # full observe here cost seconds (and once ~55s on a stuck tab)
+            # before the model was even asked.
+            current_url = ""
             try:
                 start = await bridge.request("new_task", {}, task_id=self.task_id)
+                current_url = start.get("starting_url") or ""
                 await bus.emit("STATE_CHANGED", {
                     "state": "PLANNING",
                     "detail": start.get("note", ""),
@@ -1360,12 +1481,6 @@ class Task:
                 }, task_id=self.task_id, step=0)
             except BridgeError:
                 pass
-
-            try:
-                seed = await bridge.observe(task_id=self.task_id)
-                current_url = seed.url
-            except BridgeError:
-                current_url = ""
             self.plan = await planner.make_plan(self.command, self.task_id, current_url)
 
             # "hello" is not a browser task. Answer it and stop -- before a plan
@@ -1379,15 +1494,14 @@ class Task:
             await bus.emit("PLAN_GENERATED", self.plan.model_dump(),
                            task_id=self.task_id, step=0)
 
-            if self.plan.start_url:
-                # Open a NEW tab rather than navigating whatever the user had in
-                # front of them -- that tab may be the cockpit itself. A tab the
-                # agent opened is also the only kind it is allowed to close.
+            # Work where the user already is: no tab and no reload when their tab
+            # is on the site already; otherwise the browser reuses a tab on that
+            # site, or loads it in the user's tab. A new tab is only the fallback.
+            if self.plan.start_url and _site_of(self.plan.start_url) != _site_of(current_url):
                 await bus.emit("ACTION_EXECUTING", {
                     "action": "open_tab", "preview": "open " + self.plan.start_url,
-                    "note": "the agent works in its own tab so it never takes over yours",
                 }, task_id=self.task_id, step=0)
-                res = await bridge.request("open_tab", {"url": self.plan.start_url},
+                res = await bridge.request("open_tab", {"url": self.plan.start_url, "reuse": True},
                                            task_id=self.task_id)
                 await bus.emit("ACTION_EXECUTED", {"action": "open_tab", "result": res},
                                task_id=self.task_id, step=0)

@@ -90,6 +90,8 @@ Return JSON exactly ONE of these:
 {"reply": "..."}                                     <- nothing to do in a browser
 {"objective": "...", "start_url": "https://..." or null,
  "steps": [{"n": 1, "goal": "...", "done_when": "..."}],
+ "recipient": "the person or chat the user wants a message sent to, exactly as
+               the user named them" or null,
  "notes": "..."}"""
 
 
@@ -142,4 +144,5 @@ async def make_plan(command: str, task_id: str, current_url: str = "",
         steps=steps,
         start_url=start_url,
         notes=str(data.get("notes") or "").strip(),
+        recipient=str(data.get("recipient") or "").strip(),
     )

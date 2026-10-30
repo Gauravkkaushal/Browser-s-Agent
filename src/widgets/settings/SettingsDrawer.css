@@ -1,16 +1,13 @@
 .settings-drawer .ant-drawer-content {
-  background: var(--ns-bg-1) !important;
+  background: var(--ns-bg-0) !important;
   color: var(--ns-text);
-  background-image:
-    radial-gradient(60% 40% at 100% 0%, rgba(139, 123, 255, 0.14), transparent 60%),
-    radial-gradient(50% 30% at 0% 100%, rgba(34, 211, 238, 0.1), transparent 60%) !important;
 }
 
 .settings-drawer .ant-drawer-header {
-  background: rgba(16, 19, 30, 0.85) !important;
+  background: rgba(255, 255, 255, 0.78) !important;
   border-bottom: 1px solid var(--ns-border) !important;
   padding: 14px 18px;
-  backdrop-filter: blur(10px);
+  backdrop-filter: saturate(1.8) blur(20px);
 }
 
 .settings-drawer-header {
@@ -21,10 +18,7 @@
 
 .settings-drawer-header .header-icon {
   font-size: 20px;
-  background: var(--ns-gradient-brand);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  color: var(--ns-teal);
 }
 
 .settings-drawer-header .title-text {
@@ -55,8 +49,8 @@
 .section-label {
   font-size: 13px;
   font-weight: 650;
-  color: #e5e3f5;
-  letter-spacing: 0.2px;
+  color: var(--ns-text);
+  letter-spacing: -0.005em;
 }
 
 .section-hint {
@@ -76,25 +70,25 @@
 .engine-radio-group .ant-radio-button-wrapper {
   height: auto !important;
   line-height: normal !important;
-  padding: 10px 12px !important;
-  background: var(--ns-surface) !important;
+  padding: 12px 14px !important;
+  background: #fff !important;
   border: 1px solid var(--ns-border) !important;
-  border-radius: 10px !important;
-  color: #cbd5e1 !important;
-  backdrop-filter: blur(6px);
-  transition: all 0.2s ease;
+  border-radius: 14px !important;
+  color: var(--ns-text) !important;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
+
+.engine-radio-group .ant-radio-button-wrapper::before { display: none !important; }
 
 .engine-radio-group .ant-radio-button-wrapper:hover {
   border-color: var(--ns-border-strong) !important;
-  background: rgba(139, 123, 255, 0.1) !important;
 }
 
 .engine-radio-group .ant-radio-button-wrapper-checked {
-  background: linear-gradient(135deg, rgba(139, 123, 255, 0.18), rgba(34, 211, 238, 0.1)) !important;
-  border-color: rgba(178, 190, 255, 0.5) !important;
+  background: #fff !important;
+  border-color: var(--ns-teal) !important;
   color: var(--ns-text) !important;
-  box-shadow: 0 4px 16px rgba(76, 58, 200, 0.2);
+  box-shadow: 0 0 0 3px var(--ns-teal-soft);
 }
 
 .engine-card .card-header {
@@ -120,7 +114,7 @@
 }
 
 .engine-card .card-icon.server-icon {
-  color: #c084fc;
+  color: var(--ns-teal-deep);
 }
 
 .engine-card .card-desc {
@@ -148,15 +142,14 @@
 }
 
 .specs-card {
-  background: var(--ns-surface);
+  background: #fff;
   border: 1px solid var(--ns-border);
-  border-radius: 10px;
-  padding: 10px 12px;
+  border-radius: 14px;
+  padding: 12px 14px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-top: 6px;
-  backdrop-filter: blur(6px);
 }
 
 .spec-row {
@@ -182,13 +175,14 @@
 }
 
 .settings-actions .ant-btn-primary {
-  background: var(--ns-gradient-cta);
+  background: var(--ns-teal);
   border: none;
-  color: #0a0c15;
-  font-weight: 700;
-  box-shadow: 0 6px 18px rgba(124, 92, 255, 0.35);
+  border-radius: 999px;
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 6px 14px -6px rgba(10, 124, 102, 0.7);
 }
 
 .settings-actions .ant-btn-primary:hover {
-  filter: brightness(1.06);
+  background: var(--ns-teal-deep) !important;
 }

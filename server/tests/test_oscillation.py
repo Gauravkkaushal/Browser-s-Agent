@@ -22,6 +22,10 @@ class TestCycleDetection:
     def test_a_single_pair_is_not_yet_a_cycle(self):
         """Clicking two different controls once each is ordinary work."""
         assert not is_oscillation(_ran("mark_all"), "clear_all")
+
+    def test_a_three_stroke_dead_end_is_a_cycle_on_its_second_lap(self):
+        assert is_oscillation(_ran("open", "download", "close", "open", "download"), "close") == 3
+        assert not is_oscillation(_ran("open", "download", "close", "open"), "download")
         assert not is_oscillation(_ran("mark_all", "clear_all"), "mark_all")
 
     def test_genuine_progress_is_never_blocked(self):

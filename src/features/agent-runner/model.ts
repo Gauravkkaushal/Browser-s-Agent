@@ -83,9 +83,22 @@ function isDetachedNow(): boolean {
   return typeof location !== 'undefined' && location.hash.startsWith('#detached')
 }
 
-const SERVER_HTTP = 'https://browser-s-agent.onrender.com'
-const SERVER_WS = 'wss://browser-s-agent.onrender.com/ws/cockpit'
+// Same key and default the service worker uses (agent-background.js), so the
+// popup and the worker always talk to one server.
+const DEFAULT_AGENT_WS = 'wss://browser-s-agent.onrender.com/ws/agent'
 const RECONNECT_MS = 1500
+
+function serverUrls(agentWs: string): { ws: string; http: string } {
+  try {
+    const u = new URL(agentWs)
+    return {
+      ws: `${u.protocol}//${u.host}/ws/cockpit`,
+      http: `${u.protocol === 'wss:' ? 'https:' : 'http:'}//${u.host}`,
+    }
+  } catch {
+    return serverUrls(DEFAULT_AGENT_WS)
+  }
+}
 
 /** Events worth showing a human. The rest is plumbing. */
 const NARRATED = new Set([
@@ -115,7 +128,10 @@ function describe(e: Envelope): string | null {
     case 'ACTION_VERIFIED':
       return `Done: ${p.action}`
     case 'VERIFICATION_FAILED':
-      return p.counted_as_strike === false ? null : `That did not take effect — trying another way.`
+      // A wait that saw nothing new is not a failure worth narrating.
+      return p.counted_as_strike === false || p.action === 'wait'
+        ? null
+        : `That did not take effect — trying another way.`
     case 'RECOVERY_COMPLETED':
       return p.handled ? `Recovered: ${p.detail}` : null
     case 'LOGIN_REQUIRED':
@@ -199,6 +215,8 @@ export function useAgentRunner() {
   const [connected, setConnected] = useState(false)
   const [browserLinked, setBrowserLinked] = useState(false)
   const [authToken, setAuthToken] = useState('')
+  const [agentWs, setAgentWs] = useState(DEFAULT_AGENT_WS)
+  const server = serverUrls(agentWs)
   const [pending, setPending] = useState<PendingConfirmation | null>(null)
   const [preApprove, setPreApproveState] = useState(false)
   // Which page the agent would act on. Empty means there is none.
@@ -238,9 +256,10 @@ export function useAgentRunner() {
           setTargetPage(reply.target_url || '')
           if (reply.auth_token) setAuthToken(reply.auth_token)
         })
-        chrome.storage?.local?.get('local_model_status', (data) => {
+        chrome.storage?.local?.get(['local_model_status', 'agentServerUrl'], (data) => {
           if (!alive || chrome.runtime?.lastError) return
           setLocalModelStatus(data.local_model_status || null)
+          setAgentWs(data.agentServerUrl || DEFAULT_AGENT_WS)
         })
       } catch {
         /* not running as an extension */
@@ -356,6 +375,14 @@ export function useAgentRunner() {
         setStatusText(p.detail ? `${p.state} — ${p.detail}` : String(p.state).toLowerCase())
         break
       }
+      case 'ACTION_EXECUTING': {
+        setStatusText(`${p.preview || p.action}…`)
+        break
+      }
+      case 'ACTION_EXECUTED': {
+        setStatusText(`Checking the result of ${p.action}…`)
+        break
+      }
       case 'OBSERVATION_RECEIVED': {
         setStatusText(`Looking at ${String(p.url || '').slice(0, 60)}`)
         // The masked snapshot is proof of what was blacked out before anything
@@ -454,7 +481,7 @@ export function useAgentRunner() {
       if (closed) return
       let ws: WebSocket
       try {
-        ws = new WebSocket(SERVER_WS, ['netrashield.v1', `auth.${authToken}`])
+        ws = new WebSocket(server.ws, ['netrashield.v1', `auth.${authToken}`])
       } catch {
         retry = setTimeout(connect, RECONNECT_MS)
         return
@@ -524,7 +551,7 @@ export function useAgentRunner() {
       if (retry) clearTimeout(retry)
       socketRef.current?.close()
     }
-  }, [authToken, handle])
+  }, [authToken, server.ws, handle])
 
   const send = useCallback((type: string, payload: Record<string, unknown>) => {
     const ws = socketRef.current
@@ -692,7 +719,7 @@ export function useAgentRunner() {
     updateTask,
     detach,
     isDetached,
-    serverUrl: SERVER_HTTP,
+    serverUrl: server.http,
     localModelStatus,
   }
 }

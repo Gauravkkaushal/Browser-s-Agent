@@ -309,6 +309,9 @@ class Plan(BaseModel):
     steps: List[PlanStep] = Field(default_factory=list)
     start_url: Optional[str] = None
     notes: str = ""
+    # The person or chat the user wants a message delivered to, if any. The
+    # loop refuses to type into a composer unless this name is on screen.
+    recipient: str = ""
     # Set when the message was not a browser task at all -- a greeting, a
     # question about the agent, a remark. Then this is simply the answer, and
     # no page is opened, observed or acted on.

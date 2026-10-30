@@ -432,7 +432,7 @@ async function ensureOffscreenDocument() {
   return offscreenReady
 }
 
-async function runOcr(screenshotB64) {
+async function runOcr(screenshotB64, maxRegions) {
   if (!screenshotB64) return { ok: false, error: 'no screenshot to read' }
   try {
     await ensureOffscreenDocument()
@@ -440,7 +440,11 @@ async function runOcr(screenshotB64) {
     return { ok: false, error: 'could not start the offscreen OCR worker: ' + e.message }
   }
   try {
-    const res = await chrome.runtime.sendMessage({ type: 'AGENT_OCR', screenshot: screenshotB64 })
+    // A worker that never answers must not hang every scan behind it forever.
+    const res = await Promise.race([
+      chrome.runtime.sendMessage({ type: 'AGENT_OCR', screenshot: screenshotB64, max_regions: maxRegions }),
+      new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: 'OCR worker did not answer in 20s' }), 20000)),
+    ])
     return res || { ok: false, error: 'no response from offscreen OCR worker' }
   } catch (e) {
     return { ok: false, error: 'ocr bridge failed: ' + e.message }
@@ -562,6 +566,211 @@ function dataUrlToBlob(dataUrl) {
   return new Blob([bytes], { type: mime })
 }
 
+async function blobToBase64(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  let binary = ''
+  const CHUNK = 0x8000
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK))
+  }
+  return btoa(binary)
+}
+
+/**
+ * Text and QR codes INSIDE a picture (a certificate, a scanned ID card) have no
+ * DOM text, so the page's own scanner cannot see them. Crop that picture out
+ * of the visible tab and read it on-device: Tesseract for words, jsQR for
+ * codes. Nothing leaves the machine; only word boxes go back to the page,
+ * in CSS px relative to the picture's top-left corner.
+ */
+/**
+ * Read a picture from its own bytes -- full resolution, nothing overlapping it,
+ * and no need for the tab to be on screen. Boxes come back as fractions of the
+ * picture (0..1) so the page can place them at whatever size it shows it.
+ */
+async function scanImageBytes(src) {
+  const blob = dataUrlToBlob(src) // the page reads the bytes; this worker never fetches a host
+  const bmp = await createImageBitmap(blob)
+  // OCR cost grows with pixels; 1600px on the long side still reads card text.
+  const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height))
+  const w = Math.max(1, Math.round(bmp.width * scale))
+  const h = Math.max(1, Math.round(bmp.height * scale))
+  const canvas = new OffscreenCanvas(w, h)
+  const ctx = canvas.getContext('2d')
+  ctx.drawImage(bmp, 0, 0, w, h)
+  const frac = (x, y, bw, bh) => [x / w, y / h, bw / w, bh / h]
+  // Decodable QR codes (jsQR) plus anything that only LOOKS like one -- a dense
+  // or decorative code jsQR cannot read is still a code someone else could scan.
+  const pixels = ctx.getImageData(0, 0, w, h)
+  const qr = detectQrBoxes(ctx, w, h).map((q) => frac(q.x, q.y, q.w, q.h))
+    .concat(qrLikeBoxes(pixels.data, w, h).map((q) => frac(q[0], q[1], q[2], q[3])))
+  // Read it upright first; a photographed card is often sideways, so when few
+  // words read confidently, try it turned a quarter each way and keep the best.
+  let best = null
+  for (const rotation of [0, 90, 270]) {
+    const turned = rotation ? rotateCanvas(canvas, rotation) : canvas
+    const ocr = await runOcr(await blobToBase64(await turned.convertToBlob({ type: 'image/jpeg', quality: 0.92 })), 400)
+    if (!ocr || !ocr.ok) {
+      if (!rotation) return { ok: false, error: 'ocr: ' + ((ocr && ocr.error) || 'no result'), qr, fraction: true }
+      continue
+    }
+    if (!best || (ocr.strong || 0) > (best.ocr.strong || 0)) best = { ocr, rotation, tw: turned.width, th: turned.height }
+    if ((ocr.strong || 0) >= UPRIGHT_ENOUGH) break
+  }
+  const back = (b) => unrotateFraction([b[0] / best.tw, b[1] / best.th, b[2] / best.tw, b[3] / best.th], best.rotation)
+  const words = (best.ocr.regions || []).map((wd) => ({ text: wd.text, box: back(wd.box) }))
+  const lines = (best.ocr.lines || []).map((ln) => ({ text: ln.text, box: back(ln.box) }))
+  return { ok: true, words, lines, qr, rotation: best.rotation, ms: best.ocr.ms, fraction: true }
+}
+
+// Confident words that mean "this reads upright"; below it, try other turns.
+const UPRIGHT_ENOUGH = 8
+
+/** The canvas turned clockwise by 90 or 270 degrees. */
+function rotateCanvas(src, degrees) {
+  const out = new OffscreenCanvas(src.height, src.width)
+  const ctx = out.getContext('2d')
+  ctx.translate(out.width / 2, out.height / 2)
+  ctx.rotate((degrees * Math.PI) / 180)
+  ctx.drawImage(src, -src.width / 2, -src.height / 2)
+  return out
+}
+
+/**
+ * A box given as fractions of the picture turned clockwise by `rotation`,
+ * back as fractions of the original, upright-as-stored picture.
+ */
+function unrotateFraction(b, rotation) {
+  const [x, y, w, h] = b
+  if (rotation === 90) return [y, 1 - x - w, h, w]
+  if (rotation === 270) return [1 - y - h, x, h, w]
+  return b
+}
+
+/**
+ * Head boxes (fractions of the picture) from the offscreen person detector.
+ * Its own request: the text masks must not wait on a vision model.
+ */
+async function scanFacesBytes(src, rotation) {
+  const bmp = await createImageBitmap(dataUrlToBlob(src))
+  const scale = Math.min(1, 1024 / Math.max(bmp.width, bmp.height))
+  let canvas = new OffscreenCanvas(Math.max(1, Math.round(bmp.width * scale)), Math.max(1, Math.round(bmp.height * scale)))
+  canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height)
+  // The person detector only knows upright people: use the turn OCR found.
+  if (rotation === 90 || rotation === 270) canvas = rotateCanvas(canvas, rotation)
+  const jpeg = await blobToBase64(await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.9 }))
+  await ensureOffscreenDocument()
+  const res = await Promise.race([
+    chrome.runtime.sendMessage({ type: 'AGENT_FACES', image: jpeg }),
+    new Promise((resolve) => setTimeout(() => resolve(null), 30000)),
+  ])
+  if (res && res.ok) res.faces = (res.faces || []).map((f) => unrotateFraction(f, rotation))
+  if (res) return res
+  // Say WHERE it stuck -- the offscreen console is not visible to anyone.
+  const stage = await chrome.runtime.sendMessage({ type: 'AGENT_FACE_STAGE' }).catch(() => null)
+  return { ok: false, error: 'face detector did not answer in 30s (stuck at: ' + ((stage && stage.stage) || 'unknown') + ')' }
+}
+
+/**
+ * QR-shaped regions, decodable or not: a near-square, densely filled block of
+ * cells that are each about half dark with several black/white flips per row.
+ * Text lines fail on shape (long and thin, gaps between lines); photos fail on
+ * flips (smooth areas threshold to solid cells).
+ * shortcut: one cell size, tuned for codes ~60-400px wide; add a second scale
+ * if large poster-sized codes need catching.
+ */
+function qrLikeBoxes(data, w, h) {
+  // A cell must span several modules for "about half dark" to mean anything.
+  const CELL = Math.max(8, Math.min(24, Math.round(Math.min(w, h) / 32)))
+  const cols = Math.floor(w / CELL)
+  const rows = Math.floor(h / CELL)
+  const hot = new Uint8Array(cols * rows)
+  for (let cy = 0; cy < rows; cy++) {
+    for (let cx = 0; cx < cols; cx++) {
+      let dark = 0
+      let n = 0
+      let flips = 0
+      let lines = 0
+      for (let y = cy * CELL; y < (cy + 1) * CELL; y += 2) {
+        let prev = -1
+        lines++
+        for (let x = cx * CELL; x < (cx + 1) * CELL; x++) {
+          const i = (y * w + x) * 4
+          const d = data[i] + data[i + 1] + data[i + 2] < 384 ? 1 : 0
+          dark += d
+          n++
+          if (prev !== -1 && d !== prev) flips++
+          prev = d
+        }
+      }
+      const ratio = dark / n
+      // QR modules are ~50% dark; printed text inks only ~15-30% of its area.
+      hot[cy * cols + cx] = ratio >= 0.3 && ratio <= 0.7 && flips / lines >= 0.5 ? 1 : 0
+    }
+  }
+  const seen = new Uint8Array(cols * rows)
+  const boxes = []
+  for (let start = 0; start < hot.length; start++) {
+    if (!hot[start] || seen[start]) continue
+    let minX = cols
+    let minY = rows
+    let maxX = 0
+    let maxY = 0
+    let count = 0
+    const stack = [start]
+    seen[start] = 1
+    while (stack.length) {
+      const k = stack.pop()
+      const x = k % cols
+      const y = (k - x) / cols
+      count++
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x)
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y)
+      for (const [nx, ny] of [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]]) {
+        const j = ny * cols + nx
+        if (nx >= 0 && ny >= 0 && nx < cols && ny < rows && hot[j] && !seen[j]) { seen[j] = 1; stack.push(j) }
+      }
+    }
+    const bw = maxX - minX + 1
+    const bh = maxY - minY + 1
+    const aspect = bw / bh
+    if (bw >= 4 && bh >= 4 && aspect > 0.7 && aspect < 1.4 && count / (bw * bh) >= 0.6) {
+      boxes.push([minX * CELL, minY * CELL, bw * CELL, bh * CELL])
+    }
+  }
+  return boxes
+}
+
+async function scanImageForPii(tab, rect, viewport, src) {
+  if (src) return scanImageBytes(src)
+  if (!tab || !rect || !viewport || !viewport.w) return { ok: false, error: 'no tab or picture to read' }
+  // captureVisibleTab grabs whatever tab is showing in that window, so make sure
+  // it is this one; sender.tab's own `active` flag is not reliable for that.
+  const [shown] = await chrome.tabs.query({ active: true, windowId: tab.windowId })
+  if (!shown || shown.id !== tab.id) {
+    return { ok: false, error: 'tab not visible (window ' + tab.windowId + ' shows tab ' + (shown && shown.id) + ', not ' + tab.id + ')' }
+  }
+  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' })
+  const bmp = await createImageBitmap(dataUrlToBlob(dataUrl))
+  const sx = bmp.width / viewport.w
+  const sy = bmp.height / viewport.h
+  // Only the part of the picture that is on screen can be read.
+  const x0 = Math.max(0, Math.round(rect[0] * sx))
+  const y0 = Math.max(0, Math.round(rect[1] * sy))
+  const x1 = Math.min(bmp.width, Math.round((rect[0] + rect[2]) * sx))
+  const y1 = Math.min(bmp.height, Math.round((rect[1] + rect[3]) * sy))
+  if (x1 - x0 < 20 || y1 - y0 < 20) return { ok: true, words: [], qr: [] }
+  const canvas = new OffscreenCanvas(x1 - x0, y1 - y0)
+  const ctx = canvas.getContext('2d')
+  ctx.drawImage(bmp, x0, y0, x1 - x0, y1 - y0, 0, 0, x1 - x0, y1 - y0)
+  const toRel = (x, y, w, h) => [x / sx + x0 / sx - rect[0], y / sy + y0 / sy - rect[1], w / sx, h / sy]
+  const qr = detectQrBoxes(ctx, x1 - x0, y1 - y0).map((q) => toRel(q.x, q.y, q.w, q.h))
+  const ocr = await runOcr(await blobToBase64(await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.92 })), 400)
+  if (!ocr || !ocr.ok) return { ok: false, error: 'ocr: ' + ((ocr && ocr.error) || 'no result'), qr }
+  const words = ((ocr && ocr.regions) || []).map((w) => ({ text: w.text, box: toRel(w.box[0], w.box[1], w.box[2], w.box[3]) }))
+  return { ok: true, words, qr, ms: ocr && ocr.ms }
+}
+
 async function captureRedacted(tabId, sensitiveBoxes, viewport) {
   const tab = await chrome.tabs.get(tabId)
   let dataUrl
@@ -607,15 +816,8 @@ async function captureRedacted(tabId, sensitiveBoxes, viewport) {
       ctx.fillRect(Math.round(q.x) - pad, Math.round(q.y) - pad, Math.round(q.w) + pad * 2, Math.round(q.h) + pad * 2)
     }
     const out = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.7 })
-    const buf = await out.arrayBuffer()
-    const bytes = new Uint8Array(buf)
-    let binary = ''
-    const CHUNK = 0x8000
-    for (let i = 0; i < bytes.length; i += CHUNK) {
-      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK))
-    }
     return {
-      ok: true, screenshot: btoa(binary),
+      ok: true, screenshot: await blobToBase64(out),
       masked_regions: (sensitiveBoxes || []).length + qrBoxes.length,
       qr_detected: qrBoxes.length,
       w: bmp.width, h: bmp.height,
@@ -694,13 +896,10 @@ async function uploadFile(tabId, eid, filePath) {
     if (!objectId) {
       return { ok: false, error: 'stale_element', detail: 'no element with eid ' + eid }
     }
-    const node = await chrome.debugger.sendCommand(target, 'DOM.requestNode', { objectId: objectId })
-    if (!node || !node.nodeId) {
-      return { ok: false, error: 'could not resolve the element into a DOM node' }
-    }
-
+    // By objectId: DOM.requestNode returns no nodeId until DOM.getDocument has
+    // been called, which is why every upload failed to "resolve" the input.
     await chrome.debugger.sendCommand(target, 'DOM.setFileInputFiles', {
-      nodeId: node.nodeId,
+      objectId: objectId,
       files: [filePath],
     })
 
@@ -757,6 +956,8 @@ async function handleBridgeRequest(payload) {
       const startHere = target && target.id != null ? target.id : null
       if (startHere != null) await rememberCurrentTab(startHere)
       const activeKind = active && active.url ? String(active.url).split('/')[0] + '//...' : null
+      // Our own chat window being focused is the normal case, not news.
+      const ownWindow = !!(active && active.url && active.url.startsWith(chrome.runtime.getURL('')))
       return {
         ok: true,
         result: {
@@ -765,8 +966,8 @@ async function handleBridgeRequest(payload) {
           starting_url: target && target.url ? target.url.slice(0, 120) : null,
           note: startHere == null
             ? 'no readable web page is open; open any http(s) page and try again'
-            : activeIsReadable
-              ? 'starting from the tab you are looking at'
+            : activeIsReadable || ownWindow
+              ? 'starting from ' + (target.url ? new URL(target.url).hostname : 'the open page')
               : 'the page you are looking at is ' + (activeKind || 'not a web page')
                 + ', so the agent will use another open web page',
         },
@@ -797,6 +998,7 @@ async function handleBridgeRequest(payload) {
         type: 'AGENT_OBSERVE',
         privacy_mode: args.privacy_mode || 'balanced',
         keep_terms: args.keep_terms || [],
+        will_capture: !!args.screenshot,
       })
       if (!r || !r.ok) return { ok: false, error: (r && r.error) || 'observe failed' }
       const obs = r.observation
@@ -989,6 +1191,7 @@ async function handleBridgeRequest(payload) {
             type: 'AGENT_OBSERVE',
             privacy_mode: args.privacy_mode || 'balanced',
             keep_terms: args.keep_terms || [],
+            will_capture: true,
           })
           if (r && r.ok) {
             boxes = r.observation.sensitive_boxes || []
@@ -1035,7 +1238,7 @@ async function handleBridgeRequest(payload) {
       let viewport = args.viewport
       if (!boxes) {
         try {
-          const r = await callContent(tabId, { type: 'AGENT_OBSERVE' })
+          const r = await callContent(tabId, { type: 'AGENT_OBSERVE', will_capture: true })
           boxes = r && r.ok ? r.observation.sensitive_boxes : []
           viewport = r && r.ok ? r.observation.viewport : null
         } catch (e) {
@@ -1058,6 +1261,25 @@ async function handleBridgeRequest(payload) {
     }
 
     case 'open_tab': {
+      // Task start: work where the user already is. Reuse a tab already on that
+      // site, else load the site in the user's own tab; a new tab is the last resort.
+      if (args.reuse && args.url) {
+        let origin = ''
+        try { origin = new URL(args.url).origin } catch (e) { /* bad url: fall through */ }
+        const [existing] = origin ? await chrome.tabs.query({ url: origin + '/*' }) : []
+        if (existing) {
+          await chrome.tabs.update(existing.id, { active: true })
+          await chrome.windows.update(existing.windowId, { focused: true })
+          await rememberCurrentTab(existing.id)
+          return { ok: true, result: { tab_id: existing.id, url: existing.url, reused: true, agent_owned: false } }
+        }
+        if (currentTabId != null) {
+          await chrome.tabs.update(currentTabId, { url: args.url, active: true })
+          const status = await waitForTabComplete(currentTabId, NAV_TIMEOUT_MS)
+          const fresh = await chrome.tabs.get(currentTabId)
+          return { ok: true, result: { tab_id: fresh.id, url: fresh.url, load: status, in_user_tab: true, agent_owned: false } }
+        }
+      }
       const tab = await chrome.tabs.create({ url: args.url || 'about:blank', active: true })
       agentOwnedTabs.add(tab.id)
       await rememberCurrentTab(tab.id)
@@ -1242,6 +1464,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         target_url: '', target_title: '',
       }))
     })
+    return true
+  }
+  if (message.type === 'AGENT_SCAN_FACES') {
+    scanFacesBytes(message.src, message.rotation)
+      .then(sendResponse)
+      .catch((e) => sendResponse({ ok: false, error: String((e && e.message) || e) }))
+    return true
+  }
+  if (message.type === 'AGENT_SCAN_IMAGE') {
+    scanImageForPii(_sender.tab, message.rect, message.viewport, message.src)
+      .then(sendResponse)
+      .catch((e) => sendResponse({ ok: false, error: String((e && e.message) || e) }))
     return true
   }
   if (message.type === 'AGENT_SET_SERVER') {

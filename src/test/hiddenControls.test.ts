@@ -131,7 +131,7 @@ describe('visually hidden form controls stay visible to the agent', () => {
 describe('the walker keeps proxied controls instead of skipping them', () => {
   it('measures a hidden control by its proxy rather than dropping it', () => {
     expect(SOURCE).toContain('const proxy = visualProxy(el)')
-    expect(SOURCE).toMatch(/if \(!proxy\) continue\s*\n\s*rect = proxy\.rect/)
+    expect(SOURCE).toMatch(/if \(!proxy && !fileInput\) continue\s*\n\s*if \(proxy\) rect = proxy\.rect/)
   })
 
   it('reports a checkbox by its checked state, not its value attribute', () => {
