@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Golden PII Benchmark Fixture - NetraShield</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    .box { border: 1px solid #ccc; padding: 12px; margin-bottom: 12px; border-radius: 6px; }
+    .label { font-weight: bold; color: #333; }
+    .price { color: #0a84ff; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>Citizen Verification & Payment Portal</h1>
+
+  <div id="section-aadhaar" class="box" data-expected-pii="AADHAAR" style="width: 400px; height: 50px;">
+    <span class="label">Aadhaar Number:</span>
+    <span id="aadhaar-val">9876 5432 1096</span>
+  </div>
+
+  <div id="section-pan" class="box" data-expected-pii="PAN" style="width: 400px; height: 50px;">
+    <span class="label">Permanent Account Number (PAN):</span>
+    <span id="pan-val">ABCDE1234F</span>
+  </div>
+
+  <div id="section-card" class="box" data-expected-pii="CARD" style="width: 400px; height: 50px;">
+    <span class="label">Payment Card:</span>
+    <span id="card-val">4111 1111 1111 1111</span>
+  </div>
+
+  <div id="section-upi" class="box" data-expected-pii="UPI" style="width: 400px; height: 50px;">
+    <span class="label">UPI Virtual Payment Address:</span>
+    <span id="upi-val">rahul.sharma@okhdfcbank</span>
+  </div>
+
+  <div id="section-email" class="box" data-expected-pii="EMAIL" style="width: 400px; height: 50px;">
+    <span class="label">Email Address:</span>
+    <span id="email-val">priya.nair@example.com</span>
+  </div>
+
+  <div id="section-phone" class="box" data-expected-pii="PHONE" style="width: 400px; height: 50px;">
+    <span class="label">Mobile Number:</span>
+    <span id="phone-val">+91 9876543210</span>
+  </div>
+
+  <div id="section-voter" class="box" data-expected-pii="VOTER_ID" style="width: 400px; height: 50px;">
+    <span class="label">Election Voter ID:</span>
+    <span id="voter-val">XYZ1234567</span>
+  </div>
+
+  <div id="section-dl" class="box" data-expected-pii="DRIVING_LICENSE" style="width: 400px; height: 50px;">
+    <span class="label">Driving License:</span>
+    <span id="dl-val">DL1420110012345</span>
+  </div>
+
+  <div id="section-gstin" class="box" data-expected-pii="GSTIN" style="width: 400px; height: 50px;">
+    <span class="label">GSTIN ID:</span>
+    <span id="gstin-val">27ABCDE1234F1Z5</span>
+  </div>
+
+  <div id="section-dob" class="box" data-expected-pii="DOB" style="width: 400px; height: 50px;">
+    <span class="label">Birth Information:</span>
+    <span id="dob-val">DOB: 15/08/1995</span>
+  </div>
+
+  <div id="section-protected" class="box" style="width: 400px; height: 80px;">
+    <label for="pwd" class="label">User Password:</label>
+    <input type="password" id="pwd" name="password" value="SecretPassword123" />
+    <label for="pin" class="label">Security PIN:</label>
+    <input type="text" id="pin" name="upi_pin" value="9876" />
+  </div>
+
+  <div id="section-non-pii" class="box" style="width: 400px; height: 80px;">
+    <p>Ordinary shopping item: <strong>Wireless Noise Canceling Headphones</strong></p>
+    <p>Application Fee: <span class="price">Rs 1,499.00</span> / <span class="price">$19.99</span></p>
+    <button id="btn-submit" type="button">Confirm & Pay</button>
+  </div>
+</body>
+</html>
